@@ -1,0 +1,19 @@
+{
+  "verified": false,
+  "routes": {
+    "recreational": {
+      "label": "Recreational water contact",
+      "criteria": [
+        {"param": "microcystin", "value": 8.0, "unit": "ug/L", "citation": "EPA 2019 recommended human health recreational ambient water quality criteria"},
+        {"param": "cylindrospermopsin", "value": 15.0, "unit": "ug/L", "citation": "EPA 2019 recommended human health recreational ambient water quality criteria"}
+      ]
+    },
+    "drinking_water": {
+      "label": "Drinking water intake",
+      "criteria": [
+        {"param": "microcystin", "value": 0.3, "unit": "ug/L", "citation": "EPA 2015 drinking water health advisory (microcystin-LR)"},
+        {"param": "cylindrospermopsin", "value": 0.7, "unit": "ug/L", "citation": "EPA 2015 drinking water health advisory (cylindrospermopsin)"}
+      ]
+    }
+  }
+}

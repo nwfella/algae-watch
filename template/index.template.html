@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AlgaeWatch</title>
+</head>
+<body>
+  <main>
+    <h1>AlgaeWatch</h1>
+    <p>Freshwater cyanobacteria watchlist — baked data build. Views ship in Phase 2.</p>
+    <pre id="summary">Loading…</pre>
+  </main>
+  <script>
+    window.__ALGAEWATCH_DATA__ = /*__ALGAEWATCH_DATA__*/;
+  </script>
+  <script>
+    (function () {
+      var d = window.__ALGAEWATCH_DATA__;
+      var el = document.getElementById('summary');
+      if (!d) {
+        el.textContent = 'No baked data blob found.';
+        return;
+      }
+      var states = (d.coverage && d.coverage.states_with_data) || [];
+      el.textContent =
+        'Generated ' + d.generated_utc +
+        ' · ' + (d.observations || []).length + ' observations' +
+        ' · ' + (d.sites || []).length + ' sites' +
+        ' · ' + (d.alerts || []).length + ' alerts' +
+        ' · ' + states.length + ' states with data';
+    })();
+  </script>
+</body>
+</html>

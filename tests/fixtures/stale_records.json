@@ -1,0 +1,17 @@
+{
+  "generated_utc": "2026-09-11T18:00:00Z",
+  "freshness": {"wqp": "2000-01-01"},
+  "sites": [
+    {"id": "FIXTURE-SITE-1", "name": "Fixture Site 1", "lat": 40.0, "lon": -90.0, "state": "MO", "type": "Lake", "agency": "USGS/EPA WQP", "watch": true}
+  ],
+  "observations": [
+    {"site_id": "FIXTURE-SITE-1", "param": "microcystin", "value": 5.0, "unit": "ug/L", "ts": "2000-01-01", "source_id": "wqp", "method": "lab", "stale": false}
+  ],
+  "satellite": [],
+  "alerts": [],
+  "baselines": [],
+  "coverage": {"states_with_data": ["MO"], "states_no_data": ["OR", "NE", "IA", "IN", "FL", "SC", "NC", "CA", "MN"], "note": "Absence of data is not absence of blooms."},
+  "sources": [
+    {"id": "wqp", "name": "Water Quality Portal", "url": "https://www.waterqualitydata.us/data/Result/search", "agency": "USGS + EPA", "last_updated": "2000-01-01", "freshness_budget_hours": 1080}
+  ]
+}

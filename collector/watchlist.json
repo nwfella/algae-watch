@@ -1,0 +1,15 @@
+[
+  {"id": "UMC-07110009001015/0.1", "name": "Prairie Lake", "lat": 38.7078014230, "lon": -90.6911962706, "state": "MO", "type": "Lake", "agency": "USGS/EPA WQP"},
+  {"id": "OREGONDEQ-10411-ORDEQ", "name": "Deschutes River at Deschutes River Park", "lat": 45.6325147800, "lon": -120.9125077000, "state": "OR", "type": "River", "agency": "USGS/EPA WQP"},
+  {"id": "21NEB001_WQX-LBB1BIGIND04", "name": "Big Indian Lake (11A) at Beach", "lat": 40.0589670000, "lon": -96.6953490000, "state": "NE", "type": "Lake", "agency": "USGS/EPA WQP"},
+  {"id": "21IOWA_WQX-14000134", "name": "Lost Grove Lake", "lat": 41.6694300000, "lon": -90.4354800000, "state": "IA", "type": "Lake", "agency": "USGS/EPA WQP"},
+  {"id": "INSTOR_WQX-14015", "name": "WSA-04-0001", "lat": 40.7794940736, "lon": -85.6374722222, "state": "IN", "type": "Reservoir", "agency": "USGS/EPA WQP"},
+  {"id": "21FLTPA_WQX-HAB-SW-0010", "name": "Southwest Florida HAB response site", "lat": 27.05, "lon": -82.0, "state": "FL", "type": "Lake", "agency": "USGS/EPA WQP"},
+  {"id": "21SCSANT_WQX-BEACH", "name": "South Carolina beach watch site", "lat": 32.8, "lon": -79.9, "state": "SC", "type": "Lake", "agency": "USGS/EPA WQP"},
+  {"id": "21NC03WQ-CPF126A6", "name": "Harris Lake", "lat": 35.5685700000, "lon": -78.9666900000, "state": "NC", "type": "Lake", "agency": "USGS/EPA WQP"},
+  {"id": "CA_BVR-AP01", "name": "Austin Park 01", "lat": 38.9598300000, "lon": -122.6502700000, "state": "CA", "type": "Lake", "agency": "USGS/EPA WQP"},
+  {"id": "MNPCA-27-0016-00-201", "name": "Harriet", "lat": 44.9206250000, "lon": -93.3060190000, "state": "MN", "type": "Lake", "agency": "USGS/EPA WQP"},
+  {"id": "USGS-04193500", "name": "Maumee River at Waterville OH", "lat": 41.4995, "lon": -83.7127, "state": "OH", "type": "River", "agency": "USGS"},
+  {"id": "NWS-LAKE-MICHIGAN-WI", "name": "Lake Michigan beach watch (Kewaunee/Manitowoc)", "lat": 44.35, "lon": -87.55, "state": "WI", "type": "Beach", "agency": "NWS"},
+  {"id": "NWS-LAKE-MICHIGAN-MI", "name": "Lake Michigan beach watch (Door/Southern Schoolcraft)", "lat": 45.1, "lon": -86.4, "state": "MI", "type": "Beach", "agency": "NWS"}
+]
