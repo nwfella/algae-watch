@@ -1,9 +1,20 @@
-# AlgaeWatch — Phase 1 (Collector & Bake Pipeline)
+# AlgaeWatch
 
-Backend-only build pipeline for the AlgaeWatch freshwater cyanobacteria
-watchlist. It collects exclusively official U.S. federal sources, bakes the
-result into a single self-contained `index.html`, and gates the result with a
-dependency-free Node script. No UI ships in this phase.
+**Live: https://nwfella.github.io/algae-watch/**
+
+A freshwater cyanobacteria (harmful algal bloom) watchlist built **exclusively
+from official U.S. federal data** — NOAA, USGS, EPA and NWS. No state agencies,
+no NGOs, no commercial APIs, no non-U.S. satellites. Single self-contained HTML
+file, zero dependencies, zero runtime network fetches: the collector runs
+server-side and bakes the data into the page.
+
+Six views: **Map · Watchlist · Site detail · Anomaly · Alerts · Sources**.
+
+The guiding rule of the project is that the data has to be described honestly.
+Every value carries an age, stale readings are unmistakable, missing data renders
+as an em dash rather than a zero, a site with no rows is never called clean, and
+thresholds that have not been confirmed against the EPA source say so on the page.
+
 
 ## Requirements
 
