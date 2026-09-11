@@ -374,22 +374,26 @@ def load_wqp_results(offline: bool, now: datetime) -> tuple[list[dict], dict[str
             if count == 0 and not cfg["expect_zero"]:
                 raise SystemExit(f"fail loudly: WQP {char} returned 0 rows")
     else:
-        station_url = (
-            "https://www.waterqualitydata.us/data/Station/search"
-            "?characteristicName=Microcystin&mimeType=csv&zip=no"
-        )
-        station_csv = http_get(station_url, ua=BROWSER_UA).decode("utf-8", errors="replace")
-        for row in csv.DictReader(station_csv.splitlines()):
-            sid = (row.get("MonitoringLocationIdentifier") or "").strip()
-            if sid:
-                state_code = (row.get("StateCode") or "").strip()
-                stations[sid] = {
-                    "name": (row.get("MonitoringLocationName") or "").strip() or sid,
-                    "lat": parse_numeric(row.get("LatitudeMeasure")),
-                    "lon": parse_numeric(row.get("LongitudeMeasure")),
-                    "state": FIPS_TO_STATE.get(state_code, state_from_site_id(sid)),
-                    "type": (row.get("MonitoringLocationTypeName") or "").strip() or "Waterbody",
-                }
+        # Pull the station index for EVERY characteristic we collect. A single
+        # Microcystin-filtered pass leaves sites that only report other toxins
+        # with no coordinates and no state.
+        for char in WQP_CHARACTERISTICS:
+            station_url = (
+                "https://www.waterqualitydata.us/data/Station/search"
+                f"?characteristicName={urllib.parse.quote(char)}&mimeType=csv&zip=no"
+            )
+            station_csv = http_get(station_url, ua=BROWSER_UA).decode("utf-8", errors="replace")
+            for row in csv.DictReader(station_csv.splitlines()):
+                sid = (row.get("MonitoringLocationIdentifier") or "").strip()
+                if sid and sid not in stations:
+                    state_code = (row.get("StateCode") or "").strip()
+                    stations[sid] = {
+                        "name": (row.get("MonitoringLocationName") or "").strip() or sid,
+                        "lat": parse_numeric(row.get("LatitudeMeasure")),
+                        "lon": parse_numeric(row.get("LongitudeMeasure")),
+                        "state": FIPS_TO_STATE.get(state_code, state_from_site_id(sid)),
+                        "type": (row.get("MonitoringLocationTypeName") or "").strip() or "Waterbody",
+                    }
 
         start = (now - timedelta(days=365)).strftime("%m-%d-%Y")
         end = now.strftime("%m-%d-%Y")
@@ -738,17 +742,32 @@ def build_sites(observations: list[dict], stations: dict[str, dict], watchlist: 
             }
 
     for w in watchlist:
-        if w["id"] not in sites:
-            sites[w["id"]] = {
-                "id": w["id"],
-                "name": w.get("name") or w["id"],
-                "lat": w.get("lat"),
-                "lon": w.get("lon"),
-                "state": w.get("state"),
+        sid = w["id"]
+        entry = sites.get(sid)
+        if entry is None:
+            entry = {
+                "id": sid,
+                "name": w.get("name") or sid,
+                "lat": None,
+                "lon": None,
+                "state": None,
                 "type": w.get("type") or "Waterbody",
                 "agency": w.get("agency") or "USGS/EPA WQP",
                 "watch": True,
             }
+            sites[sid] = entry
+        # The watchlist is curated by hand: its coordinates, name and state are
+        # authoritative and must NOT be displaced by a failed station join.
+        if w.get("lat") is not None and w.get("lon") is not None:
+            entry["lat"] = w["lat"]
+            entry["lon"] = w["lon"]
+        if w.get("name"):
+            entry["name"] = w["name"]
+        if w.get("state"):
+            entry["state"] = w["state"]
+        if w.get("type"):
+            entry["type"] = w["type"]
+        entry["watch"] = True
 
     return [sites[k] for k in sorted(sites)]
 

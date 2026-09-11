@@ -1,35 +1,806 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>AlgaeWatch</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AlgaeWatch — federal freshwater cyanobacteria watchlist</title>
+<style>
+:root{
+  --bg:#0b0b14; --bg2:#13131f; --bg3:#1a1a2e; --bg4:#22223a;
+  --border:#2a2a45; --text:#e8e8f0; --text2:#9898b8; --text3:#6868a0;
+  --accent:#6366f1; --accent-dim:rgba(99,102,241,0.12);
+  --green:#22c55e; --amber:#f59e0b; --red:#ef4444; --cyan:#22d3ee;
+  --radius:12px; --radius-sm:8px; --radius-xs:6px;
+  --font:'Segoe UI','Inter',system-ui,-apple-system,sans-serif;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:15px;line-height:1.45;-webkit-text-size-adjust:100%}
+h1,h2,h3{margin:0;line-height:1.2}
+a{color:var(--cyan)}
+.wrap{max-width:1180px;margin:0 auto;padding:16px}
+/* ---------- header ---------- */
+.top{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-start;justify-content:space-between;padding:18px 16px;border-bottom:1px solid var(--border);background:var(--bg2)}
+.brand h1{font-size:22px;letter-spacing:.2px}
+.brand h1 span{color:var(--cyan)}
+.brand .sub{margin:4px 0 0;color:var(--text2);font-size:12.5px}
+.meta{display:flex;flex-direction:column;gap:6px;align-items:flex-end;text-align:right}
+.stamp{color:var(--text3);font-size:12px}
+.banner{padding:7px 10px;border-radius:var(--radius-sm);font-size:12.5px;font-weight:600;max-width:520px}
+.banner.warn{background:rgba(245,158,11,.14);border:1px solid rgba(245,158,11,.45);color:#fcd34d}
+.banner.synth{background:rgba(239,68,68,.16);border:1px solid rgba(239,68,68,.55);color:#fca5a5}
+.hidden{display:none!important}
+/* ---------- tabs ---------- */
+.tabs{display:flex;flex-wrap:wrap;gap:6px;padding:10px 16px;border-bottom:1px solid var(--border);background:var(--bg2);position:sticky;top:0;z-index:5}
+.tab{background:transparent;border:1px solid var(--border);color:var(--text2);padding:7px 12px;border-radius:999px;font:inherit;font-size:13px;cursor:pointer;transition:all .15s}
+.tab:hover{border-color:var(--accent);color:var(--text)}
+.tab.active{background:var(--accent-dim);border-color:var(--accent);color:var(--text);font-weight:600}
+.tab .n{color:var(--text3);font-size:11px;margin-left:5px}
+/* ---------- cards / layout ---------- */
+.app{padding:16px}
+.grid{display:grid;gap:12px}
+.cols-2{grid-template-columns:repeat(auto-fit,minmax(300px,1fr))}
+.card{background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:14px}
+.card h2{font-size:15px;margin-bottom:8px}
+.card h3{font-size:13px;color:var(--text2);margin-bottom:6px;text-transform:uppercase;letter-spacing:.4px}
+.note{background:var(--bg3);border:1px solid var(--border);border-left:3px solid var(--cyan);border-radius:var(--radius-sm);padding:10px 12px;font-size:13px;color:var(--text2)}
+.note.warn{border-left-color:var(--amber);color:#fcd34d}
+.kv{display:flex;justify-content:space-between;gap:10px;padding:5px 0;border-bottom:1px dashed var(--border);font-size:13px}
+.kv:last-child{border-bottom:none}
+.kv .k{color:var(--text3)}
+.kv .v{color:var(--text);text-align:right}
+/* ---------- table ---------- */
+.tblwrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
+table{width:100%;border-collapse:collapse;font-size:13px;min-width:520px}
+th,td{text-align:left;padding:8px 9px;border-bottom:1px solid var(--border);vertical-align:top}
+th{color:var(--text3);font-weight:600;font-size:11.5px;text-transform:uppercase;letter-spacing:.4px;white-space:nowrap}
+tr:last-child td{border-bottom:none}
+td.num{font-variant-numeric:tabular-nums;white-space:nowrap}
+.dim{color:var(--text3)}
+/* ---------- chips ---------- */
+.chip{display:inline-block;padding:2px 7px;border-radius:999px;font-size:10.5px;font-weight:700;letter-spacing:.3px;white-space:nowrap;border:1px solid transparent}
+.chip.stale{background:rgba(245,158,11,.16);border-color:rgba(245,158,11,.5);color:#fcd34d}
+.chip.exceed{background:rgba(239,68,68,.16);border-color:rgba(239,68,68,.55);color:#fca5a5}
+.chip.approach{background:rgba(245,158,11,.14);border-color:rgba(245,158,11,.45);color:#fcd34d}
+.chip.nodata{background:rgba(152,152,184,.14);border-color:rgba(152,152,184,.35);color:var(--text3)}
+.chip.unver{background:rgba(245,158,11,.14);border-color:rgba(245,158,11,.45);color:#fcd34d}
+.chip.ok{background:rgba(34,197,94,.14);border-color:rgba(34,197,94,.4);color:#86efac}
+/* ---------- map ---------- */
+.mapbox{position:relative;width:100%;background:#0d1420;border:1px solid var(--border);border-radius:var(--radius);overflow:hidden}
+.tiles{position:absolute;inset:0;opacity:.5}
+.tiles img{position:absolute;width:auto;image-rendering:auto}
+.mapbox canvas{position:relative;display:block;width:100%;height:auto}
+.mapstatus{position:absolute;left:8px;bottom:8px;font-size:11px;color:var(--text3);background:rgba(11,11,20,.75);padding:3px 7px;border-radius:var(--radius-xs)}
+.legend{display:flex;flex-wrap:wrap;gap:10px;align-items:center;font-size:12px;color:var(--text2);margin-top:8px}
+.sw{display:inline-flex;align-items:center;gap:5px}
+.sw i{width:12px;height:12px;border-radius:3px;display:inline-block}
+/* ---------- misc ---------- */
+.btn{background:var(--bg3);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:var(--radius-xs);font:inherit;font-size:12.5px;cursor:pointer}
+.btn:hover{border-color:var(--accent)}
+.btn.primary{background:var(--accent-dim);border-color:var(--accent);font-weight:600}
+select{background:var(--bg3);color:var(--text);border:1px solid var(--border);border-radius:var(--radius-xs);padding:6px 8px;font:inherit;font-size:12.5px;max-width:100%}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.spacer{flex:1 1 auto}
+.empty{padding:26px 14px;text-align:center;color:var(--text3);border:1px dashed var(--border);border-radius:var(--radius-sm)}
+.foot{padding:18px 16px 34px;color:var(--text3);font-size:12px;border-top:1px solid var(--border);margin-top:20px}
+.chartbox{width:100%;overflow-x:auto}
+canvas.chart{width:100%;height:auto;display:block}
+ul.tight{margin:6px 0 0;padding-left:18px;color:var(--text2);font-size:13px}
+ul.tight li{margin:3px 0}
+@media (max-width:640px){
+  body{font-size:14.5px}
+  .wrap,.app{padding:12px}
+  .brand h1{font-size:19px}
+  .meta{align-items:flex-start;text-align:left}
+  .top{flex-direction:column}
+  .banner{max-width:100%}
+  table{min-width:460px}
+  .card{padding:11px}
+}
+</style>
 </head>
 <body>
-  <main>
-    <h1>AlgaeWatch</h1>
-    <p>Freshwater cyanobacteria watchlist — baked data build. Views ship in Phase 2.</p>
-    <pre id="summary">Loading…</pre>
-  </main>
-  <script>
-    window.__ALGAEWATCH_DATA__ = /*__ALGAEWATCH_DATA__*/;
-  </script>
-  <script>
-    (function () {
-      var d = window.__ALGAEWATCH_DATA__;
-      var el = document.getElementById('summary');
-      if (!d) {
-        el.textContent = 'No baked data blob found.';
+
+<header class="top">
+  <div class="brand">
+    <h1>Algae<span>Watch</span></h1>
+    <p class="sub">Freshwater cyanobacteria (harmful algal bloom) watchlist · official U.S. federal sources only: NOAA · USGS · EPA · NWS</p>
+  </div>
+  <div class="meta">
+    <div id="modeBanner" class="banner synth hidden"></div>
+    <div id="thresholdFlag" class="banner warn hidden"></div>
+    <div class="stamp">data baked <span id="genStamp">—</span></div>
+  </div>
+</header>
+
+<nav id="tabs" class="tabs" role="tablist"></nav>
+<main id="app" class="app"></main>
+<footer class="foot">
+  <p id="footNote"></p>
+</footer>
+
+<script>
+  window.__ALGAEWATCH_DATA__ = /*__ALGAEWATCH_DATA__*/;
+</script>
+<script>
+(function () {
+  'use strict';
+
+  var BLOB = (typeof window !== 'undefined' && window.__ALGAEWATCH_DATA__) ? window.__ALGAEWATCH_DATA__ : null;
+  var LS_KEY = 'algaewatch_state';
+  var VIEWS = [
+    { id: 'map', label: 'Map' },
+    { id: 'watchlist', label: 'Watchlist' },
+    { id: 'site', label: 'Site detail' },
+    { id: 'anomaly', label: 'Anomaly' },
+    { id: 'alerts', label: 'Alerts' },
+    { id: 'sources', label: 'Sources' }
+  ];
+  var MAP_EXTENT = { lon0: -125, lon1: -66.5, lat0: 24, lat1: 49.5 };
+  var COLORS = [
+    { max: 1, c: '#155e75', label: '< 1' },
+    { max: 3, c: '#0e7490', label: '1–3' },
+    { max: 10, c: '#22c55e', label: '3–10' },
+    { max: 30, c: '#f59e0b', label: '10–30' },
+    { max: 100, c: '#ef4444', label: '30–100' },
+    { max: Infinity, c: '#7f1d1d', label: '> 100' }
+  ];
+
+  /* ------------------------------------------------------------------ utils */
+  function esc(s) {
+    return String(s === null || s === undefined ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+  function isNum(v) { return typeof v === 'number' && isFinite(v); }
+  // A missing value is NEVER rendered as 0. null / undefined / NaN -> em dash.
+  function fmtValue(v, unit) {
+    if (!isNum(v)) return '—';
+    var a = Math.abs(v);
+    var dp = a >= 100 ? 0 : (a >= 10 ? 1 : 2);
+    return v.toFixed(dp) + (unit ? ' ' + unit : '');
+  }
+  function toDate(ts) {
+    if (!ts) return null;
+    var s = String(ts);
+    var d = new Date(s.length === 10 ? s + 'T00:00:00Z' : s);
+    return isNaN(d.getTime()) ? null : d;
+  }
+  function ageDays(ts, genTs) {
+    var d = toDate(ts); var g = toDate(genTs) || new Date();
+    if (!d) return null;
+    return Math.floor((g.getTime() - d.getTime()) / 86400000);
+  }
+  function fmtAge(ts, genTs) {
+    var a = ageDays(ts, genTs);
+    if (a === null) return 'no date';
+    if (a < 0) return 'future-dated';
+    if (a === 0) return 'today';
+    if (a === 1) return '1 day old';
+    if (a < 60) return a + ' days old';
+    var mo = Math.round(a / 30.44);
+    if (mo < 24) return mo + ' mo old';
+    return (a / 365.25).toFixed(1) + ' yr old';
+  }
+  function staleChip(o) {
+    return (o && o.stale) ? '<span class="chip stale" title="older than this source\u2019s freshness budget">STALE</span>' : '';
+  }
+  function levelChip(level) {
+    if (level === 'exceedance') return '<span class="chip exceed">EXCEEDS</span>';
+    if (level === 'approaching') return '<span class="chip approach">APPROACHING</span>';
+    return '';
+  }
+  function prettyParam(p) {
+    var m = {
+      microcystin: 'Microcystin', cylindrospermopsin: 'Cylindrospermopsin',
+      saxitoxin: 'Saxitoxin', 'anatoxin-a': 'Anatoxin-A',
+      cyan_index: 'CyAN satellite index', chlorophyll_a_bluegreen: 'Chlorophyll-a (blue-green)',
+      phycocyanin: 'Phycocyanin', beach_hazards_statement: 'NWS Beach Hazards Statement',
+      marine_weather_statement: 'NWS Marine Weather Statement'
+    };
+    return m[p] || p;
+  }
+
+  /* --------------------------------------------------------------- indexing */
+  function indexBlob(b) {
+    var ix = { byId: {}, obsBySite: {}, alertsBySite: {}, satBySite: {}, baseBySite: {} };
+    (b.sites || []).forEach(function (s) { ix.byId[s.id] = s; });
+    (b.observations || []).forEach(function (o) {
+      (ix.obsBySite[o.site_id] = ix.obsBySite[o.site_id] || []).push(o);
+    });
+    (b.alerts || []).forEach(function (a) {
+      (ix.alertsBySite[a.site_id] = ix.alertsBySite[a.site_id] || []).push(a);
+    });
+    (b.satellite || []).forEach(function (s) { ix.satBySite[s.site_id] = s; });
+    (b.baselines || []).forEach(function (s) { ix.baseBySite[s.site_id] = s; });
+    return ix;
+  }
+  // Newest observation overall, and newest that actually carries a value.
+  function latestOf(obs, gen) {
+    var latest = null, valued = null;
+    (obs || []).forEach(function (o) {
+      if (!o.ts) return;
+      if (!latest || String(o.ts) > String(latest.ts)) latest = o;
+      if (isNum(o.value) && (!valued || String(o.ts) > String(valued.ts))) valued = o;
+    });
+    return { latest: latest, valued: valued, age: valued ? fmtAge(valued.ts, gen) : (latest ? fmtAge(latest.ts, gen) : 'no data') };
+  }
+  function stateOf(ix, id) {
+    var s = ix.byId[id];
+    return (s && s.state) ? s.state : null;
+  }
+  function unverified(blob) {
+    var a = blob.alerts || [];
+    for (var i = 0; i < a.length; i++) if (a[i].verified === false) return true;
+    var s = (blob.sources || []);
+    for (var j = 0; j < s.length; j++) if (String(s[j].url || '') && /VERIFY/.test(String(s[j].note || ''))) return true;
+    return false;
+  }
+
+  /* ---------------------------------------------------- persistent notices */
+  function bannerHtml(blob) {
+    if (blob && blob.mode === 'offline') {
+      return '<div class="banner synth">SYNTHETIC DATA — this build came from the offline collector, '
+        + 'so the satellite layer is generated, not observed. Do not treat any value here as federal data.</div>';
+    }
+    return '';
+  }
+  function thresholdFlagHtml(blob) {
+    if (!unverified(blob)) return '';
+    return '<div class="banner warn">Thresholds UNVERIFIED — the EPA criteria driving alerts have not been '
+      + 'confirmed against the EPA source yet. Treat exceedances as provisional.</div>';
+  }
+
+  /* --------------------------------------------------------------- view: map */
+  function mercY(lat) {
+    var r = lat * Math.PI / 180;
+    return Math.log(Math.tan(Math.PI / 4 + r / 2));
+  }
+  function project(lon, lat, w, h, ext) {
+    ext = ext || MAP_EXTENT;
+    var y0 = mercY(ext.lat1), y1 = mercY(ext.lat0);
+    return {
+      x: (lon - ext.lon0) / (ext.lon1 - ext.lon0) * w,
+      y: (mercY(lat) - y0) / (y1 - y0) * h
+    };
+  }
+  function colorFor(v) {
+    for (var i = 0; i < COLORS.length; i++) if (v < COLORS[i].max) return COLORS[i].c;
+    return COLORS[COLORS.length - 1].c;
+  }
+  function buildMapModel(blob, ix) {
+    var sat = (blob.satellite || []).filter(function (s) { return s && s.grid && s.grid.length; });
+    var pins = (blob.sites || []).filter(function (s) { return isNum(s.lat) && isNum(s.lon); });
+    var noCoords = (blob.sites || []).filter(function (s) { return !isNum(s.lat) || !isNum(s.lon); }).length;
+    return {
+      sat: sat, pins: pins, noCoords: noCoords,
+      extent: MAP_EXTENT,
+      pinAlerts: pins.reduce(function (acc, s) {
+        var al = ix.alertsBySite[s.id] || [];
+        acc[s.id] = al.some(function (a) { return a.level === 'exceedance'; }) ? 'exceedance'
+          : (al.some(function (a) { return a.level === 'approaching'; }) ? 'approaching' : 'none');
+        return acc;
+      }, {})
+    };
+  }
+  function drawMap(canvas, blob, ix) {
+    if (!canvas || typeof canvas.getContext !== 'function') return 0;
+    var ctx = canvas.getContext('2d');
+    if (!ctx) return 0;
+    var w = canvas.width || 900, h = canvas.height || Math.round((canvas.width || 900) * 0.46);
+    var model = buildMapModel(blob, ix || indexBlob(blob));
+    var ops = 0;
+    ctx.clearRect(0, 0, w, h);
+    ctx.fillStyle = '#0d1420';
+    ctx.fillRect(0, 0, w, h); ops++;
+    // satellite grid cells (2 km CyAN slices, per watchlist site)
+    model.sat.forEach(function (s) {
+      var bbox = s.bbox || [];
+      if (bbox.length !== 4) return;
+      var latLo = bbox[0], lonLo = bbox[1], latHi = bbox[2], lonHi = bbox[3];
+      var rows = s.grid.length, cols = s.grid[0].length;
+      var dLat = (latHi - latLo) / rows, dLon = (lonHi - lonLo) / cols;
+      for (var r = 0; r < rows; r++) {
+        for (var c = 0; c < cols; c++) {
+          var v = s.grid[r][c];
+          if (!isNum(v)) continue;   // no retrieval -> leave unpainted, never 0
+          var lat = latHi - dLat * r;              // row 0 is the NORTH edge
+          var lon = lonLo + dLon * c;              // col 0 is the WEST edge
+          var p1 = project(lon, lat, w, h);
+          var p2 = project(lon + dLon, lat - dLat, w, h);
+          ctx.fillStyle = colorFor(v);
+          ctx.fillRect(p1.x, p1.y, Math.max(1, p2.x - p1.x), Math.max(1, p2.y - p1.y));
+          ops++;
+        }
+      }
+    });
+    // site pins
+    model.pins.forEach(function (s) {
+      var p = project(s.lon, s.lat, w, h);
+      var level = model.pinAlerts[s.id];
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, s.watch ? 4 : 2.5, 0, Math.PI * 2);
+      ctx.fillStyle = level === 'exceedance' ? '#ef4444' : (level === 'approaching' ? '#f59e0b' : '#8892b0');
+      ctx.fill(); ops++;
+      if (s.watch) {
+        ctx.strokeStyle = '#22d3ee'; ctx.lineWidth = 1.5; ctx.stroke(); ops++;
+      }
+    });
+    return ops;
+  }
+  function renderMap(blob, ix, ui) {
+    var m = buildMapModel(blob, ix);
+    var satNo = (blob.satellite || []).length - m.sat.length;
+    var html = bannerHtml(blob) + thresholdFlagHtml(blob);
+    html += '<div class="grid cols-2"><div class="card">'
+      + '<h2>CyAN satellite index &amp; watchlist sites</h2>'
+      + '<div class="mapbox"><div class="tiles" id="maptiles"></div>'
+      + '<canvas id="awmap" width="1000" height="460" aria-label="Cyanobacteria index map"></canvas>'
+      + '<div class="mapstatus" id="mapstatus">USGS National Map basemap optional — grid and pins render regardless</div></div>'
+      + '<div class="legend">'
+      + COLORS.map(function (c) { return '<span class="sw"><i style="background:' + c.c + '"></i>' + c.label + '</span>'; }).join('')
+      + '<span class="sw"><i style="background:#8892b0;border-radius:50%"></i>site</span>'
+      + '<span class="sw"><i style="background:transparent;border:2px solid #22d3ee;border-radius:50%"></i>watchlist</span>'
+      + '<span class="dim">units: mg m<sup>-3</sup> chlorophyll-a</span></div>'
+      + '</div>'
+      + '<div class="card"><h2>Coverage right now</h2>'
+      + kv('Satellite slices', m.sat.length + ' of ' + (blob.satellite || []).length + ' requests')
+      + kv('Satellite slices with no data', String(satNo))
+      + kv('Sites with coordinates', m.pins.length + ' of ' + (blob.sites || []).length)
+      + kv('Sites without coordinates (unmappable)', String(m.noCoords))
+      + kv('Watchlist sites', String((ui.watch || []).length))
+      + '<div class="note" style="margin-top:10px">Every satellite slice is a 2 km daily CyAN grid from NOAA '
+      + 'CoastWatch, which publishes roughly 11 days behind real time. Absent grid cells mean <em>no satellite '
+      + 'retrieval</em> (cloud or land), not clean water.</div>'
+      + '</div></div>';
+    return html;
+  }
+
+  /* --------------------------------------------------------- view: watchlist */
+  function watchlistHtml(blob, ix, ui) {
+    var gen = blob.generated_utc;
+    var rows = (ui.watch || []).map(function (id) {
+      var s = ix.byId[id] || { id: id, name: id };
+      var obs = ix.obsBySite[id] || [];
+      var la = latestOf(obs, gen);
+      var alerts = ix.alertsBySite[id] || [];
+      var lvl = alerts.some(function (a) { return a.level === 'exceedance'; }) ? 'exceedance'
+        : (alerts.some(function (a) { return a.level === 'approaching'; }) ? 'approaching' : 'none');
+      var valTxt = la.valued ? fmtValue(la.valued.value, la.valued.unit) + ' <span class="dim">' + esc(prettyParam(la.valued.param)) + '</span>'
+        : '<span class="dim">no federal data reported</span>';
+      return '<tr>'
+        + '<td><a href="#" data-site="' + esc(id) + '">' + esc(s.name) + '</a>'
+        + '<div class="dim">' + esc(s.type || '') + '</div></td>'
+        + '<td>' + (s.state ? '<span class="chip nodata">' + esc(s.state) + '</span>' : '<span class="dim">—</span>') + '</td>'
+        + '<td class="num">' + valTxt + '</td>'
+        + '<td>' + esc(la.age) + ' ' + staleChip(la.valued) + '</td>'
+        + '<td>' + (levelChip(lvl) || '<span class="dim">—</span>') + '</td>'
+        + '<td><button class="btn" data-unwatch="' + esc(id) + '">remove</button></td>'
+        + '</tr>';
+    }).join('');
+    var watchSet = {};
+    (ui.watch || []).forEach(function (id) { watchSet[id] = true; });
+    var addable = (blob.sites || []).filter(function (s) { return !watchSet[s.id]; })
+      .sort(function (a, b) { return String(a.name).localeCompare(String(b.name)); });
+    var html = bannerHtml(blob) + thresholdFlagHtml(blob);
+    html += '<div class="card"><h2>Watchlist <span class="dim">(' + (ui.watch || []).length + ' sites)</span></h2>'
+      + '<div class="tblwrap"><table><thead><tr><th>Site</th><th>State</th><th>Latest value</th><th>Age</th><th>Alert</th><th></th></tr></thead>'
+      + '<tbody>' + (rows || '<tr><td colspan="6"><div class="empty">No sites on the watchlist.</div></td></tr>') + '</tbody></table></div>'
+      + '<div class="row" style="margin-top:12px"><select id="addSite">'
+      + '<option value="">add a site…</option>'
+      + addable.map(function (s) {
+        return '<option value="' + esc(s.id) + '">' + esc(s.name) + (s.state ? ' (' + esc(s.state) + ')' : '') + '</option>';
+      }).join('')
+      + '</select><button class="btn primary" id="addBtn">Add</button>'
+      + '<span class="spacer"></span><span class="dim">' + addable.length + ' further sites available</span></div>'
+      + '<div class="note warn" style="margin-top:12px"><strong>Ages are load-bearing.</strong> A site showing '
+      + '"no federal data reported" is <em>not</em> a clean site — recent lab submissions reach the Water Quality '
+      + 'Portal months late, and the 2024\u2013now record has a documented ingest gap.</div>'
+      + '</div>';
+    return html;
+  }
+
+  /* ------------------------------------------------------- view: site detail */
+  function renderSite(blob, ix, ui) {
+    var gen = blob.generated_utc;
+    var id = ui.site;
+    if (!id || !ix.byId[id]) {
+      var watch = (ui.watch || []);
+      return bannerHtml(blob) + thresholdFlagHtml(blob)
+        + '<div class="card"><h2>Site detail</h2><div class="empty">Pick a site from the watchlist or the map.'
+        + (watch.length ? '<div style="margin-top:10px" class="row">' + watch.slice(0, 8).map(function (w) {
+          return '<button class="btn" data-site="' + esc(w) + '">' + esc((ix.byId[w] || {}).name || w) + '</button>';
+        }).join('') + '</div>' : '') + '</div></div>';
+    }
+    var s = ix.byId[id];
+    var obs = (ix.obsBySite[id] || []).slice().sort(function (a, b) { return String(b.ts) < String(a.ts) ? -1 : 1; });
+    var sat = ix.satBySite[id];
+    var alerts = ix.alertsBySite[id] || [];
+    var la = latestOf(obs, gen);
+    var bySource = {};
+    obs.forEach(function (o) { bySource[o.source_id] = (bySource[o.source_id] || 0) + 1; });
+    var rows = obs.slice(0, 40).map(function (o) {
+      return '<tr><td class="num">' + esc(o.ts || '—') + '</td><td>' + esc(prettyParam(o.param)) + '</td>'
+        + '<td class="num">' + fmtValue(o.value, o.unit) + '</td>'
+        + '<td>' + esc(fmtAge(o.ts, gen)) + ' ' + staleChip(o) + '</td>'
+        + '<td class="dim">' + esc(o.source_id) + (o.method ? ' · ' + esc(o.method) : '') + '</td></tr>';
+    }).join('');
+    var html = bannerHtml(blob) + thresholdFlagHtml(blob);
+    html += '<div class="grid cols-2">'
+      + '<div class="card"><h2>' + esc(s.name) + '</h2>'
+      + kv('State', s.state || '—')
+      + kv('Type', s.type || '—')
+      + kv('Coordinates', (isNum(s.lat) && isNum(s.lon)) ? s.lat.toFixed(4) + ', ' + s.lon.toFixed(4) : 'not published by the source')
+      + kv('Agency', s.agency || '—')
+      + kv('Last federal data', la.valued ? esc(la.valued.ts) + ' (' + esc(la.age) + ')' : 'no data reported')
+      + kv('Observations held', String(obs.length))
+      + kv('Sources contributing', Object.keys(bySource).map(function (k) { return k + ':' + bySource[k]; }).join(' · ') || '—')
+      + '</div>'
+      + '<div class="card"><h2>Satellite slice</h2>'
+      + (sat
+        ? kv('Slice date', (sat.date || 'no retrieval in window') + (sat.synthetic ? ' <span class="chip stale">SYNTHETIC</span>' : ''))
+          + kv('Days with data', (sat.days_with_data === null || sat.days_with_data === undefined) ? '—' : sat.days_with_data + ' of ' + sat.window_days)
+          + kv('Resolution', (sat.res_km || '—') + ' km')
+          + kv('Grid', sat.grid.length + ' × ' + (sat.grid[0] ? sat.grid[0].length : 0))
+          + '<div id="siteChart" class="chartbox"><canvas class="chart" id="awchart" width="640" height="150"></canvas></div>'
+        : '<div class="empty">No CyAN slice for this site in the current build.</div>')
+      + '</div></div>'
+      + '<div class="card" style="margin-top:12px"><h2>Observations <span class="dim">(' + obs.length + ' held'
+      + (obs.length > 40 ? ', showing newest 40' : '') + ')</span></h2>'
+      + '<div class="tblwrap"><table><thead><tr><th>Date</th><th>Parameter</th><th>Value</th><th>Age</th><th>Source</th></tr></thead><tbody>'
+      + (rows || '<tr><td colspan="5"><div class="empty">No observations recorded for this site.</div></td></tr>')
+      + '</tbody></table></div></div>';
+    if (alerts.length) {
+      html += '<div class="card" style="margin-top:12px"><h2>Alert criteria applied</h2>'
+        + alerts.map(function (a) {
+          return '<div class="kv"><span class="k">' + esc(prettyParam(a.param)) + ' ' + levelChip(a.level) + '</span>'
+            + '<span class="v">measured ' + fmtValue(a.value, 'µg/L') + ' · criterion ' + fmtValue(a.criterion, 'µg/L')
+            + ' <span class="chip unver">VERIFY</span><br><span class="dim">' + esc(a.criterion_src) + '</span></span></div>';
+        }).join('') + '</div>';
+    }
+    return html;
+  }
+
+  /* ------------------------------------------------------------ view: anomaly */
+  function renderAnomaly(blob, ix) {
+    var rows = [];
+    (blob.baselines || []).forEach(function (b) {
+      var sat = ix.satBySite[b.site_id];
+      var cur = (sat && isNum(sat.mean)) ? sat.mean : null;
+      var dev = (isNum(cur) && isNum(b.mean) && b.mean !== 0) ? (cur - b.mean) / b.mean * 100 : null;
+      var s = ix.byId[b.site_id] || { name: b.site_id };
+      rows.push({ site: s.name, id: b.site_id, cur: cur, base: b.mean, dev: dev, years: b.years, estimated: !!b.estimated });
+    });
+    rows.sort(function (a, b) { return (b.dev === null ? -1e9 : b.dev) - (a.dev === null ? -1e9 : a.dev); });
+    var body = rows.map(function (r) {
+      return '<tr><td><a href="#" data-site="' + esc(r.id) + '">' + esc(r.site) + '</a></td>'
+        + '<td class="num">' + fmtValue(r.cur, 'mg m<sup>-3</sup>') + '</td>'
+        + '<td class="num">' + fmtValue(r.base, 'mg m<sup>-3</sup>') + '</td>'
+        + '<td class="num">' + (r.dev === null ? '—' : (r.dev > 0 ? '+' : '') + r.dev.toFixed(0) + '%') + '</td>'
+        + '<td class="num">' + (r.years === null || r.years === undefined ? '—' : r.years) + '</td>'
+        + '<td>' + (r.estimated ? '<span class="chip unver">ESTIMATE</span>' : '<span class="chip ok">climatology</span>') + '</td></tr>';
+    }).join('');
+    return bannerHtml(blob) + thresholdFlagHtml(blob)
+      + '<div class="card"><h2>Current vs baseline</h2>'
+      + '<div class="note warn"><strong>Every baseline in this build is a single-window estimate</strong> '
+      + '(flagged <code>estimated</code>), not the multi-year day-of-year climatology the specification calls for. '
+      + 'Read the deviation column as a within-window comparison only.</div>'
+      + '<div class="tblwrap" style="margin-top:10px"><table><thead><tr><th>Site</th><th>Current mean</th>'
+      + '<th>Baseline mean</th><th>Deviation</th><th>Years</th><th>Basis</th></tr></thead><tbody>'
+      + (body || '<tr><td colspan="6"><div class="empty">No baseline comparisons available.</div></td></tr>')
+      + '</tbody></table></div></div>';
+  }
+
+  /* ------------------------------------------------------------- view: alerts */
+  function renderAlerts(blob, ix) {
+    var gen = blob.generated_utc;
+    var a = (blob.alerts || []).slice();
+    a.sort(function (x, y) {
+      var rank = { exceedance: 0, approaching: 1 };
+      return (rank[x.level] === undefined ? 9 : rank[x.level]) - (rank[y.level] === undefined ? 9 : rank[y.level]);
+    });
+    var rows = a.map(function (al) {
+      var s = ix.byId[al.site_id] || { name: al.site_id };
+      return '<tr><td><a href="#" data-site="' + esc(al.site_id) + '">' + esc(s.name) + '</a>'
+        + '<div class="dim">' + esc(s.state || '') + '</div></td>'
+        + '<td>' + esc(prettyParam(al.param)) + '</td>'
+        + '<td class="num">' + fmtValue(al.value, 'µg/L') + '</td>'
+        + '<td class="num">' + fmtValue(al.criterion, 'µg/L') + '</td>'
+        + '<td>' + (levelChip(al.level) || '<span class="dim">—</span>') + '</td>'
+        + '<td>' + esc(al.ts || '—') + '<div class="dim">' + esc(fmtAge(al.ts, gen)) + '</div></td>'
+        + '<td class="dim">' + esc(al.criterion_src || '') + ' '
+        + (al.verified === false ? '<span class="chip unver">UNVERIFIED</span>' : '') + '</td></tr>';
+    }).join('');
+    return bannerHtml(blob) + thresholdFlagHtml(blob)
+      + '<div class="card"><h2>Threshold exceedances <span class="dim">(' + a.length + ')</span></h2>'
+      + '<div class="note">Every row shows the measured value, the criterion value, and the citation behind it. '
+      + 'State-issued advisories are excluded by the federal-sources-only rule and may <em>lead</em> what appears here.</div>'
+      + '<div class="tblwrap" style="margin-top:10px"><table><thead><tr><th>Site</th><th>Parameter</th>'
+      + '<th>Measured</th><th>Criterion</th><th>Level</th><th>Sampled</th><th>Citation</th></tr></thead><tbody>'
+      + (rows || '<tr><td colspan="7"><div class="empty">No exceedances in the current build.</div></td></tr>')
+      + '</tbody></table></div></div>';
+  }
+
+  /* ------------------------------------------------------------ view: sources */
+  function renderSources(blob) {
+    var cov = blob.coverage || {};
+    var withData = cov.states_with_data || [], noData = cov.states_no_data || [];
+    var srcs = (blob.sources || []).map(function (s) {
+      return '<div class="kv"><span class="k">' + esc(s.name || s.id) + '<br><span class="dim">' + esc(s.agency || '')
+        + '</span></span><span class="v">' + esc(s.last_updated || '—')
+        + '<br><span class="dim" style="word-break:break-all">' + esc(s.url || '') + '</span></span></div>';
+    }).join('');
+    var fresh = blob.freshness || {};
+    return bannerHtml(blob) + thresholdFlagHtml(blob)
+      + '<div class="grid cols-2">'
+      + '<div class="card"><h2>Data sources</h2>' + srcs
+      + '<div class="note" style="margin-top:10px"><strong>Every input is an official U.S. federal source.</strong> '
+      + 'No state agencies, NGOs, commercial APIs or non-U.S. satellites are used. The single documented exception '
+      + 'is www.waterqualitydata.us, operated jointly by USGS and EPA.</div></div>'
+      + '<div class="card"><h2>Coverage &amp; recency</h2>'
+      + '<div class="note" style="margin-top:2px"><strong>' + esc(cov.note || 'Absence of data is not absence of blooms.')
+      + '</strong> A state with no rows has not <em>reported</em>; it has not been cleared.</div>'
+      + '<h3 style="margin-top:12px">States with data (' + withData.length + ')</h3>'
+      + '<div>' + (withData.length ? withData.map(function (s) {
+        return '<span class="chip ok" style="margin:2px 3px 2px 0">' + esc(s) + '</span>';
+      }).join('') : '<span class="dim">none</span>') + '</div>'
+      + '<h3 style="margin-top:12px">States with NO reported data (' + noData.length + ')</h3>'
+      + '<div>' + (noData.length ? noData.map(function (s) {
+        return '<span class="chip nodata" style="margin:2px 3px 2px 0">' + esc(s) + '</span>';
+      }).join('') : '<span class="dim">none</span>') + '</div>'
+      + '<h3 style="margin-top:12px">Source freshness as baked</h3>'
+      + Object.keys(fresh).map(function (k) {
+        return '<div class="kv"><span class="k">' + esc(k) + '</span><span class="v">' + esc(fresh[k] || '—') + '</span></div>';
+      }).join('')
+      + '</div></div>'
+      + '<div class="card" style="margin-top:12px"><h2>Known limits of this dataset</h2>'
+      + '<ul class="tight">'
+      + '<li><strong>Ingest lag.</strong> WQP lab submissions arrive months late: monthly cyanotoxin counts collapse '
+      + 'from Nov 2025 to Apr 2026 while a control analyte (Missouri pH) collapses identically. That is reporting '
+      + 'lag, not ecology. Never read a quiet month as a clean month.</li>'
+      + '<li><strong>Satellite lag.</strong> The CyAN dataset publishes roughly 11 days behind real time, so the '
+      + 'newest slice is always older than "yesterday".</li>'
+      + '<li><strong>Monitoring is uneven.</strong> A handful of state programmes generate most of the lab data; '
+      + 'most states generate none.</li>'
+      + '<li><strong>Live sensors are effectively dead.</strong> Only three USGS continuous algae sensors report '
+      + 'nationally, with readings roughly 20 months old. They are shown, and marked stale.</li>'
+      + '<li><strong>No federal HAB advisory type.</strong> NWS issues beach-hazard and marine statements, not '
+      + 'bloom advisories; those are state-issued and therefore excluded.</li>'
+      + '<li><strong>Thresholds are unverified.</strong> EPA criteria in this build have not been confirmed '
+      + 'against the EPA source.</li>'
+      + '</ul></div>';
+  }
+
+  function kv(k, v) {
+    return '<div class="kv"><span class="k">' + esc(k) + '</span><span class="v">' + v + '</span></div>';
+  }
+
+  /* --------------------------------------------------------------- dispatch */
+  function renderView(name, blob, ix, ui) {
+    if (!blob) return '<div class="empty">No baked data found in this build.</div>';
+    ix = ix || indexBlob(blob);
+    ui = ui || uiState(blob);
+    if (name === 'map') return renderMap(blob, ix, ui);
+    if (name === 'watchlist') return watchlistHtml(blob, ix, ui);
+    if (name === 'site') return renderSite(blob, ix, ui);
+    if (name === 'anomaly') return renderAnomaly(blob, ix);
+    if (name === 'alerts') return renderAlerts(blob, ix);
+    if (name === 'sources') return renderSources(blob);
+    return '<div class="empty">Unknown view.</div>';
+  }
+  function viewCount(name, blob) {
+    if (name === 'alerts') return (blob.alerts || []).length;
+    if (name === 'watchlist') return 0;
+    if (name === 'sources') return (blob.sources || []).length;
+    if (name === 'anomaly') return (blob.baselines || []).length;
+    if (name === 'map') return (blob.satellite || []).length;
+    return 0;
+  }
+
+  /* ------------------------------------------------------------------ state */
+  function defaultState(blob) {
+    var watch = (blob.sites || []).filter(function (s) { return s.watch; }).map(function (s) { return s.id; });
+    return { view: 'map', site: watch.length ? watch[0] : null, watch: watch };
+  }
+  function deepMerge(t, o) {
+    if (!o || typeof o !== 'object') return t;
+    Object.keys(o).forEach(function (k) {
+      var v = o[k];
+      if (v && typeof v === 'object' && !Array.isArray(v) && t[k] && typeof t[k] === 'object' && !Array.isArray(t[k])) {
+        t[k] = deepMerge(t[k], v);
+      } else if (v !== undefined && v !== null) { t[k] = v; }
+    });
+    return t;
+  }
+  function loadState(blob) {
+    var d = defaultState(blob || {});
+    try {
+      var raw = (typeof localStorage !== 'undefined') ? localStorage.getItem(LS_KEY) : null;
+      if (raw) return deepMerge(d, JSON.parse(raw));
+    } catch (e) { /* schema drift or corrupt storage must never break the app */ }
+    return d;
+  }
+  function saveState(s) {
+    try { if (typeof localStorage !== 'undefined') localStorage.setItem(LS_KEY, JSON.stringify(s)); } catch (e) {}
+  }
+  function uiState(blob) {
+    if (BLOB && blob === BLOB) return loadState(blob);
+    return defaultState(blob || {});
+  }
+
+  /* ---------------------------------------------------------------- browser */
+  var IS_BROWSER = (typeof document !== 'undefined' && typeof window !== 'undefined'
+    && typeof window.addEventListener === 'function' && typeof document.createElement === 'function');
+
+  function init() {
+    var app = document.getElementById('app');
+    var tabs = document.getElementById('tabs');
+    var genStamp = document.getElementById('genStamp');
+    var modeBanner = document.getElementById('modeBanner');
+    var thresholdFlag = document.getElementById('thresholdFlag');
+    var footNote = document.getElementById('footNote');
+    if (!app || !BLOB) return;
+    var ix = indexBlob(BLOB);
+    var ui = loadState(BLOB);
+    if (!ui.site || !ix.byId[ui.site]) ui.site = (ui.watch[0] || null);
+
+    if (genStamp) genStamp.textContent = BLOB.generated_utc || '—';
+    if (modeBanner && BLOB.mode === 'offline') modeBanner.classList.remove('hidden');
+    if (thresholdFlag && unverified(BLOB)) thresholdFlag.classList.remove('hidden');
+    if (footNote) {
+      footNote.textContent = 'Generated from official U.S. federal sources. Thresholds provisional until '
+        + 'confirmed against the EPA source. A blank state means no data was reported \u2014 not that water was clean.';
+    }
+
+    tabs.innerHTML = VIEWS.map(function (v) {
+      var n = viewCount(v.id, BLOB);
+      return '<button class="tab" role="tab" data-view="' + v.id + '">' + v.label
+        + (n ? '<span class="n">' + n + '</span>' : '') + '</button>';
+    }).join('');
+
+    function paint() {
+      Array.prototype.forEach.call(tabs.querySelectorAll('.tab'), function (b) {
+        b.classList.toggle('active', b.dataset.view === ui.view);
+      });
+      app.innerHTML = renderView(ui.view, BLOB, ix, ui);
+      if (ui.view === 'map') {
+        var c = document.getElementById('awmap');
+        if (c) {
+          var box = c.parentElement ? c.parentElement.clientWidth : 1000;
+          var dpr = window.devicePixelRatio || 1;
+          var cssW = Math.max(280, Math.min(box || 1000, 1000));
+          var cssH = Math.round(cssW * 0.46);
+          c.style.width = cssW + 'px';
+          c.style.height = cssH + 'px';
+          c.width = Math.round(cssW * dpr);
+          c.height = Math.round(cssH * dpr);
+          var ctx = c.getContext('2d');
+          if (ctx && ctx.scale) ctx.scale(dpr, dpr);
+          drawMap(c, BLOB, ix);
+          addTiles(document.getElementById('maptiles'), cssW, cssH);
+        }
+      }
+      if (ui.view === 'site') drawChart();
+    }
+
+    // Optional .gov basemap. Purely decorative: if the tiles are blocked or
+    // offline, the grid and pins above still render.
+    function addTiles(host, w, h) {
+      if (!host) return;
+      var z = 4, n = Math.pow(2, z);
+      function lonTile(lon) { return (lon + 180) / 360 * n; }
+      function latTile(lat) {
+        var r = lat * Math.PI / 180;
+        return (1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2 * n;
+      }
+      var x0 = lonTile(MAP_EXTENT.lon0), x1 = lonTile(MAP_EXTENT.lon1);
+      var y0 = latTile(MAP_EXTENT.lat1), y1 = latTile(MAP_EXTENT.lat0);
+      var px = w / (x1 - x0);
+      var html = '', loaded = 0, tried = 0;
+      for (var tx = Math.floor(x0); tx <= Math.floor(x1); tx++) {
+        for (var ty = Math.floor(y0); ty <= Math.floor(y1); ty++) {
+          tried++;
+          html += '<img alt="" loading="lazy" style="left:' + ((tx - x0) * px).toFixed(1) + 'px;top:'
+            + ((ty - y0) * px).toFixed(1) + 'px;width:' + px.toFixed(1) + 'px;height:' + px.toFixed(1) + 'px"'
+            + ' src="https://basemap.nationalmap.gov/arcgis/rest/services/USGSTopo/MapServer/tile/'
+            + z + '/' + ty + '/' + tx + '">';
+        }
+      }
+      host.innerHTML = html;
+      var status = document.getElementById('mapstatus');
+      Array.prototype.forEach.call(host.querySelectorAll('img'), function (im) {
+        im.onload = function () { loaded++; };
+        im.onerror = function () {
+          host.style.display = 'none';
+          if (status) status.textContent = 'USGS basemap blocked — grid and pins shown without it';
+        };
+      });
+      if (status) {
+        setTimeout(function () {
+          if (loaded === 0 && tried > 0 && host.style.display !== 'none') {
+            host.style.display = 'none';
+            status.textContent = 'USGS basemap unavailable — grid and pins shown without it';
+          }
+        }, 2500);
+      }
+    }
+
+    function drawChart() {
+      var c = document.getElementById('awchart');
+      if (!c) return;
+      var sat = ix.satBySite[ui.site];
+      if (!sat || !sat.grid || !sat.grid.length) return;
+      var ctx = c.getContext('2d');
+      if (!ctx) return;
+      var w = c.width, h = c.height;
+      var vals = [];
+      sat.grid.forEach(function (row) { row.forEach(function (v) { if (isNum(v)) vals.push(v); }); });
+      ctx.clearRect(0, 0, w, h);
+      ctx.fillStyle = '#13131f'; ctx.fillRect(0, 0, w, h);
+      if (!vals.length) {
+        ctx.fillStyle = '#6868a0';
+        ctx.font = '12px sans-serif';
+        ctx.fillText('No satellite retrieval in this window (cloud or land) — not zero.', 10, h / 2);
         return;
       }
-      var states = (d.coverage && d.coverage.states_with_data) || [];
-      el.textContent =
-        'Generated ' + d.generated_utc +
-        ' · ' + (d.observations || []).length + ' observations' +
-        ' · ' + (d.sites || []).length + ' sites' +
-        ' · ' + (d.alerts || []).length + ' alerts' +
-        ' · ' + states.length + ' states with data';
-    })();
-  </script>
+      var max = Math.max.apply(null, vals), bw = w / vals.length;
+      vals.forEach(function (v, i) {
+        var bh = (v / max) * (h - 24);
+        ctx.fillStyle = colorFor(v);
+        ctx.fillRect(i * bw, h - 18 - bh, Math.max(1, bw - 0.5), bh);
+      });
+      ctx.fillStyle = '#6868a0';
+      ctx.font = '11px sans-serif';
+      ctx.fillText('CyAN index, ' + vals.length + ' retrieved cells (max ' + max.toFixed(2) + ' mg m\u207b\u00b3)', 6, 12);
+    }
+
+    tabs.addEventListener('click', function (e) {
+      var b = e.target.closest ? e.target.closest('.tab') : null;
+      if (!b) return;
+      ui.view = b.dataset.view;
+      saveState(ui);
+      paint();
+    });
+    app.addEventListener('click', function (e) {
+      var t = e.target;
+      var site = t.getAttribute && t.getAttribute('data-site');
+      if (site) { e.preventDefault(); ui.site = site; ui.view = 'site'; saveState(ui); paint(); return; }
+      var un = t.getAttribute && t.getAttribute('data-unwatch');
+      if (un) {
+        ui.watch = ui.watch.filter(function (x) { return x !== un; });
+        if (ui.site === un) ui.site = ui.watch[0] || null;
+        saveState(ui); paint(); return;
+      }
+      if (t.id === 'addBtn') {
+        var sel = document.getElementById('addSite');
+        if (sel && sel.value) {
+          if (ui.watch.indexOf(sel.value) < 0) ui.watch.push(sel.value);
+          ui.site = sel.value;
+          saveState(ui); paint();
+        }
+      }
+    });
+
+    paint();
+  }
+
+  /* ------------------------------------------------------------- public API */
+  var API = {
+    VIEWS: VIEWS, MAP_EXTENT: MAP_EXTENT, COLORS: COLORS,
+    esc: esc, fmtValue: fmtValue, fmtAge: fmtAge, ageDays: ageDays,
+    prettyParam: prettyParam, indexBlob: indexBlob, latestOf: latestOf,
+    bannerHtml: bannerHtml, thresholdFlagHtml: thresholdFlagHtml, unverified: unverified,
+    project: project, colorFor: colorFor, buildMapModel: buildMapModel, drawMap: drawMap,
+    renderView: renderView, defaultState: defaultState, deepMerge: deepMerge, viewCount: viewCount
+  };
+  if (typeof window !== 'undefined') window.__AW__ = API;
+  if (typeof module !== 'undefined' && module.exports) module.exports = API;
+
+  if (IS_BROWSER) {
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
+    else init();
+  }
+})();
+</script>
 </body>
 </html>
