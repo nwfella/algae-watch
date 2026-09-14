@@ -99,6 +99,42 @@ def data_signature(blob: dict) -> str:
     ).hexdigest()
 
 
+def build_report(blob: dict, new_alerts: list) -> str:
+    """Quiet-watchdog message: '' unless a NEW threshold breach appeared.
+
+    Routine refreshes say nothing at all. NWS advisories are deliberately kept
+    out of the alerting path - a beach-hazards statement is not a criterion
+    breach, and waking the user for one would be a false alarm.
+    """
+    alerts = blob.get("alerts", [])
+    breaches = [a for a in new_alerts if a[2] in ("exceedance", "approaching")]
+    if not breaches:
+        return ""
+
+    names = {s["id"]: (s.get("name") or s["id"]) for s in blob.get("sites", [])}
+    by_key = {(a.get("site_id"), a.get("param"), a.get("level")): a for a in alerts}
+    advisories = [a for a in new_alerts if a[2] not in ("exceedance", "approaching")]
+    stale = sum(1 for o in blob.get("observations", []) if o.get("stale"))
+
+    out = [f"AlgaeWatch: {len(breaches)} new threshold breach(es) - {blob.get('generated_utc')}"]
+    for sid, param, level in breaches[:10]:
+        a = by_key.get((sid, param, level), {})
+        val, crit = a.get("value"), a.get("criterion")
+        detail = ""
+        if isinstance(val, (int, float)) and isinstance(crit, (int, float)):
+            detail = f" (measured {val:g} vs criterion {crit:g} ug/L)"
+        out.append(f"  - {names.get(sid, sid)} :: {param} :: {level}{detail}")
+    if len(breaches) > 10:
+        out.append(f"  ...and {len(breaches) - 10} more")
+    out.append(f"  live: {LIVE_URL}")
+    out.append(f"  context: {len(alerts)} alerts, {stale} stale observations")
+    if advisories:
+        out.append(f"  ({len(advisories)} new NWS advisories also present - not breaches)")
+    if any(a.get("verified") is False for a in alerts):
+        out.append("  note: thresholds are still UNVERIFIED against the EPA source")
+    return "\n".join(out)
+
+
 def main() -> int:
     for required in (REPO / "collector" / "collect.py", REPO / "collector" / "bake.py"):
         if not required.exists():
@@ -192,31 +228,11 @@ def main() -> int:
         "checked_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     }, indent=1), encoding="utf-8")
 
-    # --- 7. report (this stdout is the delivered message) -------------------
-    out = []
-    out.append(f"AlgaeWatch refreshed and deployed ({gen})")
-    out.append(f"  live: {LIVE_URL}")
-    out.append("  observations by source: " + ", ".join(f"{k} {v}" for k, v in sorted(per_source.items())))
-    out.append(f"  sites {len(blob.get('sites', []))} | satellite slices {len(blob.get('satellite', []))} | alerts {len(alerts)}")
-    stale = sum(1 for o in blob.get("observations", []) if o.get("stale"))
-    out.append(f"  stale observations (expected high - WQP ingest lag): {stale}")
-    # Distinguish genuine criterion breaches from NWS statements: calling a
-    # beach-hazards advisory a "threshold exceedance" would be a false claim.
-    breaches = [a for a in new_alerts if a[2] in ("exceedance", "approaching")]
-    advisories = [a for a in new_alerts if a[2] not in ("exceedance", "approaching")]
-    if breaches:
-        out.append(f"  NEW threshold breaches ({len(breaches)}):")
-        for sid, param, level in breaches[:10]:
-            out.append(f"    - {names.get(sid, sid)} :: {param} :: {level}")
-    else:
-        out.append("  no new threshold breaches")
-    if advisories:
-        out.append(f"  new federal advisories ({len(advisories)}) - NWS statements, NOT threshold breaches")
-    if len(new_alerts) == len(sigs) and prev_sigs == set():
-        out.append("  (first tracked run - everything counts as new)")
-    if not blob.get("criteria_verified", True) or any(a.get("verified") is False for a in alerts):
-        out.append("  note: thresholds are still UNVERIFIED against the EPA source")
-    print("\n".join(out))
+    # --- 7. report: quiet watchdog ------------------------------------------
+    # Silent on a routine refresh; stdout only when something needs attention.
+    msg = build_report(blob, new_alerts)
+    if msg:
+        print(msg)
     return 0
 
 

@@ -151,7 +151,7 @@ Because a legitimate federal source can return 20-month-old values, the collecto
 | **1 — Collector** | cmdc ($1-plan) | stdlib Python collector + baker + `verify_site.js` | Hermes re-runs the collector and **reconciles row counts against the source totals**; freshness assertions fire on a seeded stale fixture; allowlist rejects a non-.gov host |
 | **2 — SPA** | cmdc | 6 views over the baked blob, framework shell reused | Render selftests with `?v=N` cache-bust; verify null-vs-zero rendering, coverage-gap states, alert citation display |
 | **3 — Ship** | Hermes | `verify_site.js` gate → GitHub Pages | Non-zero exit blocks deploy |
-| **4 — Watchdog** | Hermes | Cron: refresh + threshold alerts | Asserts baked `generated_utc` advances; alerts on collect failure |
+| **4 — Watchdog** | Hermes | Cron: refresh + threshold alerts | ✅ **Done.** Daily 08:00 `no_agent` cron running `scripts/daily_refresh.py`. Asserts `generated_utc` advances, refuses to build from a dirty source tree, and deploys only if **both** gates pass. Silent when the data is unchanged; stdout is the delivered notification; a non-zero exit raises an alert. |
 
 ## 11. Decisions — LOCKED 2026-09-11
 

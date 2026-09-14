@@ -204,3 +204,60 @@ The CSS carries a `≤640px` breakpoint and no element exceeds the viewport at t
 widths tested, but the 375px claim remains unverified until it is opened on a
 real device.
 
+---
+
+# Phase 4 — daily refresh (cron)
+
+`scripts/daily_refresh.py` is the whole pipeline and runs unattended every day
+at **08:00 local** via a Hermes `no_agent` cron job (no LLM tokens involved).
+The cron entry point is a thin launcher at
+`~/AppData/Local/hermes/scripts/algae-watch-daily-refresh.py`, which delegates to
+the versioned script so there is only one copy of the logic.
+
+```
+collect (live)  ->  compare data signature  ->  bake  ->  gate  ->  harness  ->  push
+```
+
+## Safety properties
+
+- **Nothing ships unless both gates pass.** `verify_site.js` (provenance,
+  allowlist, freshness, null-vs-zero) and `aw_test.js` (the six views and the
+  honesty rules) must both exit 0. A failure leaves the live site on its last
+  known-good build.
+- **Refuses to build from a dirty source tree.** If anything has modified
+  `collector/`, `scripts/` or `template/`, the run aborts rather than baking an
+  unexpected artefact.
+- **Refuses synthetic data.** A blob with `mode != "live"` is a hard failure, so
+  a broken run can never publish generated satellite grids as federal data.
+- **Asserts freshness advanced.** If `generated_utc` does not move forward, the
+  run fails loudly (guards against a cached or stale collect).
+- **Only commits when the data actually changed.** The comparison hashes the blob
+  *excluding* `generated_utc` — otherwise every run would produce a commit of
+  pure noise. `index.html` keeps its previous bake stamp when nothing moved.
+- **PATH and interpreter hygiene.** The launcher and pipeline both strip
+  `PYTHONPATH`/`PYTHONHOME` (the Hermes venv exports its own agent packages,
+  which has broken external Python runs before), resolve `node` and `git`
+  explicitly, and set `GIT_TERMINAL_PROMPT=0` so a missing credential fails fast
+  instead of hanging the scheduled run.
+
+## Delivery semantics — quiet watchdog
+
+The job is deliberately quiet. It speaks only when something needs attention:
+
+| Run outcome | What you get |
+|---|---|
+| Data unchanged | **nothing** — silent tick |
+| Data updated, gates pass, pushed, **no new breach** | **nothing** — it deploys silently |
+| **NEW threshold breach** | a message naming each breach with its measured value vs the criterion, plus the live URL and a context line |
+| New NWS advisory only | **nothing** — a beach-hazards statement is not a criterion breach, and alerting on one would be a false alarm |
+| Collect failed, a gate failed, or the push failed | a **non-zero exit**, which the scheduler turns into an error alert; the live site stays on its last known-good build |
+
+Manual run (identical to what cron does):
+
+```bash
+python scripts/daily_refresh.py
+python scripts/test_refresh_report.py   # unit-tests the alerting logic, no network
+```
+
+
+
