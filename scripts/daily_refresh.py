@@ -200,12 +200,20 @@ def main() -> int:
     out.append(f"  sites {len(blob.get('sites', []))} | satellite slices {len(blob.get('satellite', []))} | alerts {len(alerts)}")
     stale = sum(1 for o in blob.get("observations", []) if o.get("stale"))
     out.append(f"  stale observations (expected high - WQP ingest lag): {stale}")
-    if new_alerts:
-        out.append(f"  NEW threshold exceedances ({len(new_alerts)}):")
-        for sid, param, level in new_alerts[:10]:
+    # Distinguish genuine criterion breaches from NWS statements: calling a
+    # beach-hazards advisory a "threshold exceedance" would be a false claim.
+    breaches = [a for a in new_alerts if a[2] in ("exceedance", "approaching")]
+    advisories = [a for a in new_alerts if a[2] not in ("exceedance", "approaching")]
+    if breaches:
+        out.append(f"  NEW threshold breaches ({len(breaches)}):")
+        for sid, param, level in breaches[:10]:
             out.append(f"    - {names.get(sid, sid)} :: {param} :: {level}")
     else:
-        out.append("  no new threshold exceedances")
+        out.append("  no new threshold breaches")
+    if advisories:
+        out.append(f"  new federal advisories ({len(advisories)}) - NWS statements, NOT threshold breaches")
+    if len(new_alerts) == len(sigs) and prev_sigs == set():
+        out.append("  (first tracked run - everything counts as new)")
     if not blob.get("criteria_verified", True) or any(a.get("verified") is False for a in alerts):
         out.append("  note: thresholds are still UNVERIFIED against the EPA source")
     print("\n".join(out))
