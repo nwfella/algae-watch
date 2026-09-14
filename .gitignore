@@ -2,3 +2,4 @@ _probe/
 __pycache__/
 *.pyc
 cached/
+.refresh_state.json
