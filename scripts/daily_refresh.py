@@ -43,6 +43,11 @@ def die(msg: str) -> "None":
 
 def env() -> dict:
     e = dict(os.environ)
+    # The Hermes environment exports PYTHONPATH pointing at its own agent venv
+    # (pydantic_lite/requests shadowing), which has broken external Python runs
+    # before. The collector is stdlib-only, so hand it a clean interpreter.
+    e.pop("PYTHONPATH", None)
+    e.pop("PYTHONHOME", None)
     # Fail fast instead of hanging the cron run on a credential prompt.
     e["GIT_TERMINAL_PROMPT"] = "0"
     # The scheduler may run with a bare PATH; make sure node and git resolve.
