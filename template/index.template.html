@@ -67,7 +67,7 @@ td.num{font-variant-numeric:tabular-nums;white-space:nowrap}
 .chip.ok{background:rgba(34,197,94,.14);border-color:rgba(34,197,94,.4);color:#86efac}
 /* ---------- map ---------- */
 .mapbox{position:relative;width:100%;background:#0d1420;border:1px solid var(--border);border-radius:var(--radius);overflow:hidden}
-.tiles{position:absolute;inset:0;opacity:.5}
+.tiles{position:absolute;inset:0;opacity:.85;pointer-events:none}
 .tiles img{position:absolute;width:auto;image-rendering:auto}
 .mapbox canvas{position:relative;display:block;width:100%;height:auto}
 .mapstatus{position:absolute;left:8px;bottom:8px;font-size:11px;color:var(--text3);background:rgba(11,11,20,.75);padding:3px 7px;border-radius:var(--radius-xs)}
@@ -384,7 +384,11 @@ ul.tight li{margin:3px 0}
     var model = buildMapModel(blob, ix || indexBlob(blob));
     var ops = 0;
     ctx.clearRect(0, 0, w, h);
-    ctx.fillStyle = '#0d1420';
+    // TRANSLUCENT wash, not an opaque fill. The canvas is stacked ABOVE the
+    // .gov basemap tile layer, so an opaque background hides the entire map
+    // behind a flat box. Alpha < 1 lets the tiles read through while still
+    // darkening them enough for the cyanobacteria ramp and pins to pop.
+    ctx.fillStyle = 'rgba(13,20,32,0.45)';
     ctx.fillRect(0, 0, w, h); ops++;
     // satellite grid cells (2 km CyAN slices, per watchlist site)
     model.sat.forEach(function (s) {
@@ -483,8 +487,8 @@ ul.tight li{margin:3px 0}
       + '<button class="btn" data-map="fit" title="Fit the watchlist">Fit</button>'
       + '<button class="btn" data-map="reset" title="Whole country">US</button>'
       + '</div>'
-      + '<div class="maphint dim">Drag to pan &middot; scroll or pinch to zoom &middot; click a pin for site detail</div>'
       + '</div>'
+      + '<div class="maphint dim">Drag to pan &middot; scroll or pinch to zoom &middot; click a pin for site detail</div>'
       + '<div class="legend">'
       + COLORS.map(function (c) { return '<span class="sw"><i style="background:' + c.c + '"></i>' + c.label + '</span>'; }).join('')
       + '<span class="sw"><i style="background:#8892b0;border-radius:50%"></i>site</span>'
@@ -819,7 +823,10 @@ ul.tight li{margin:3px 0}
       if (ui.view === 'map') {
         var c = document.getElementById('awmap');
         var box = (c && c.parentElement) ? c.parentElement.clientWidth : 1000;
-        var cssW = Math.max(260, Math.min(box || 1000, 1000));
+        // Do NOT clamp this to 1000px: the tile layer is absolutely positioned
+        // to the FULL map box (inset:0), so a narrower canvas projects the
+        // basemap at the wrong scale and leaves stray tiles at the edges.
+        var cssW = Math.max(260, box || 1000);
         var cssH = Math.round(cssW * 0.46);
         var dpr = window.devicePixelRatio || 1;
         if (c) {
@@ -948,7 +955,7 @@ ul.tight li{margin:3px 0}
       var b = viewBounds(v);
       var x0 = lonTile(b.lon0), x1 = lonTile(b.lon1);
       var y0 = latTile(b.lat1), y1 = latTile(b.lat0);
-      var html = '', loaded = 0, tried = 0, MAXT = 48;
+      var html = '', loaded = 0, tried = 0, MAXT = 96;
       for (var tx = Math.floor(x0); tx <= Math.floor(x1) && tried < MAXT; tx++) {
         for (var ty = Math.floor(y0); ty <= Math.floor(y1) && tried < MAXT; ty++) {
           if (ty < 0 || ty >= n) continue;
@@ -964,11 +971,15 @@ ul.tight li{margin:3px 0}
       host.innerHTML = html;
       host.style.display = '';
       Array.prototype.forEach.call(host.querySelectorAll('img'), function (im) {
-        im.onload = function () { loaded++; };
-        im.onerror = function () {
+        // A CACHED image can finish loading before this handler is attached, so
+        // `onload` alone never fires and `loaded` stays 0 - the 2.5s watchdog
+        // below would then hide a perfectly good basemap. Check .complete first.
+        if (im.complete && im.naturalWidth > 0) { loaded++; return; }
+        im.addEventListener('load', function () { loaded++; });
+        im.addEventListener('error', function () {
           host.style.display = 'none';
           updateStatus();
-        };
+        });
       });
       setTimeout(function () {
         if (loaded === 0 && tried > 0 && host.style.display !== 'none') {

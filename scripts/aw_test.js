@@ -71,11 +71,41 @@ function stubCanvas() {
   const c2d = {
     fillStyle: '', strokeStyle: '', lineWidth: 1, font: '',
     clearRect() { ops.clearRect++; },
-    fillRect(x, y, w, h) { ops.fillRect++; ops.rects.push({ x, y, w, h }); },
+    fillRect(x, y, w, h) { ops.fillRect++; ops.rects.push({ x, y, w, h, fill: this.fillStyle }); },
     arc() { ops.arc++; },
     fill() {}, stroke() {}, beginPath() {}, scale() {}, fillText() { ops.fillText++; }
   };
   return { canvas: { width: 1000, height: 460, getContext: () => c2d }, ops };
+}
+
+// Alpha of a CSS colour: 1 for opaque hex/rgb, the parsed value for rgba.
+// Used to prove the map canvas background cannot hide the basemap.
+function parseAlpha(css) {
+  const s = String(css || '').trim();
+  const m = /^rgba\(\s*[\d.]+\s*,\s*[\d.]+\s*,\s*[\d.]+\s*,\s*([\d.]+)\s*\)$/i.exec(s);
+  if (m) return parseFloat(m[1]);
+  if (/^#[0-9a-f]{6}$/i.test(s)) return 1;
+  if (/^rgb\(/i.test(s)) return 1;
+  return null;
+}
+
+// Inner HTML of the element containing `token`, found by walking <div>/</div>
+// nesting. Lets a test assert what IS and IS NOT inside an element without a DOM.
+function elementInner(html, token) {
+  const at = html.indexOf(token);
+  if (at < 0) return null;
+  const open = html.lastIndexOf('<div', at);
+  if (open < 0) return null;
+  const afterOpen = html.indexOf('>', open);
+  if (afterOpen < 0) return null;
+  const re = /<div\b|<\/div>/g;
+  re.lastIndex = afterOpen + 1;
+  let depth = 1, m;
+  while ((m = re.exec(html))) {
+    depth += m[0] === '</div>' ? -1 : 1;
+    if (depth === 0) return html.slice(afterOpen + 1, m.index);
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------------- main
@@ -281,6 +311,42 @@ function main() {
   const fc = stubCanvas();
   const fops = AW.drawMap(fc.canvas, farBlob, AW.indexBlob(farBlob), sfit, 800, 400);
   check(fops === 1, `off-screen windows are culled (${fops} op = background only)`);
+
+  // ---- the canvas must NOT paint an opaque box over the .gov basemap -------
+  // REGRESSION (reported from a real screenshot): drawMap() filled the entire
+  // canvas with opaque #0d1420, and the canvas is stacked ON TOP of the basemap
+  // tile layer, so every view rendered as a flat black box with the tiles
+  // peeking out only where the canvas did not reach.
+  const bg = zc.ops.rects[0];
+  check(!!bg && /^rgba?\(/i.test(String(bg.fill)), `canvas background is a colour value (${bg && bg.fill})`);
+  check(parseAlpha(bg.fill) !== null, 'canvas background colour is parseable');
+  check(parseAlpha(bg.fill) < 1,
+        `canvas background is TRANSLUCENT so the basemap reads through (alpha=${parseAlpha(bg.fill)})`);
+  check(bg.x === 0 && bg.y === 0 && bg.w === 800 && bg.h === 400,
+        'canvas background covers exactly the drawing surface (no over- or under-paint)');
+
+  // The tile layer is absolutely positioned to the FULL map box, so clamping the
+  // canvas to 1000px projected the basemap at the wrong scale and left stray
+  // tile fragments along the right/bottom edges.
+  check(!/Math\.min\(box \|\| 1000, 1000\)/.test(template),
+        'map width is not clamped below the tile layer width');
+  check(/\.tiles\{[^}]*pointer-events:none/.test(template),
+        'the basemap layer cannot swallow pointer events (pan/zoom stay live)');
+  check(template.includes('im.complete'),
+        'cached tiles are counted via .complete (watchdog cannot hide a good basemap)');
+
+  // ---- the map stack must line up ----------------------------------------
+  // The tile layer is absolutely positioned over the whole .mapbox, so ANY
+  // in-flow sibling inside .mapbox (the pan/zoom hint used to live there) makes
+  // the box taller than the canvas and leaves a band of basemap showing along
+  // the bottom edge. Walk the template's actual div nesting rather than
+  // guessing with a regex across a tag boundary.
+  const mapboxInner = elementInner(template, 'id="mapbox"');
+  check(mapboxInner !== null, 'the map box element can be located in the template');
+  check(mapboxInner !== null && mapboxInner.indexOf('maphint') === -1,
+        'the map hint is NOT a child of .mapbox (box height stays equal to the canvas)');
+  check(mapboxInner !== null && /id="maptiles"/.test(mapboxInner) && /id="awmap"/.test(mapboxInner),
+        'the basemap layer and the canvas are both children of the map box');
 
   // hit-testing
   const target = watchPts[0];
