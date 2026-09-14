@@ -171,7 +171,14 @@ ul.tight li{margin:3px 0}
   function toDate(ts) {
     if (!ts) return null;
     var s = String(ts);
-    var d = new Date(s.length === 10 ? s + 'T00:00:00Z' : s);
+    // Every timestamp the collector emits is UTC, but NWS strings carry no
+    // zone designator. new Date() would read those as LOCAL time, and mixing
+    // the two made a same-day NWS alert render as "future-dated". Treat any
+    // naive timestamp as UTC.
+    if (!/(Z|[+-]\d{2}:?\d{2})$/.test(s)) {
+      s = (s.indexOf('T') > 0) ? s + 'Z' : s + 'T00:00:00Z';
+    }
+    var d = new Date(s);
     return isNaN(d.getTime()) ? null : d;
   }
   function ageDays(ts, genTs) {
@@ -430,6 +437,37 @@ ul.tight li{margin:3px 0}
     });
     return best;
   }
+  // "Why does this look old?" answered where the data is shown, not buried in
+  // a footnote: each federal source has a different, structural lag.
+  function dataVintageHtml(blob) {
+    var f = blob.freshness || {};
+    var gen = blob.generated_utc;
+    var labels = { cyan: 'CyAN satellite', wqp: 'WQP lab results', usgs: 'USGS sensors', nws: 'NWS alerts' };
+    var why = {
+      cyan: 'NOAA publishes this ~11 days behind real time',
+      wqp: 'lab results are submitted in batches, months late',
+      usgs: 'the federal sensor feed is effectively dead',
+      nws: 'real time'
+    };
+    var out = [];
+    ['cyan', 'wqp', 'usgs', 'nws'].forEach(function (k) {
+      if (!f[k]) return;
+      out.push(kv(labels[k] + ' \u2014 newest', esc(fmtAge(f[k], gen))
+        + ' <span class="dim">(' + why[k] + ')</span>'));
+    });
+    var ages = [];
+    (blob.observations || []).forEach(function (o) {
+      if (o.source_id !== 'wqp' || !o.ts) return;
+      var d = ageDays(o.ts, gen);
+      if (d !== null) ages.push(d);
+    });
+    if (ages.length) {
+      ages.sort(function (a, b) { return a - b; });
+      out.push(kv('WQP lab results \u2014 median age',
+        ages[Math.floor(ages.length / 2)] + ' days <span class="dim">of ' + ages.length + ' held</span>'));
+    }
+    return out.join('');
+  }
   function renderMap(blob, ix, ui) {
     var m = buildMapModel(blob, ix);
     var satNo = (blob.satellite || []).length - m.sat.length;
@@ -460,6 +498,8 @@ ul.tight li{margin:3px 0}
       + kv('Sites with coordinates', m.pins.length + ' of ' + (blob.sites || []).length)
       + kv('Sites without coordinates (unmappable)', String(m.noCoords))
       + kv('Watchlist sites', String((ui.watch || []).length))
+      + '<h3 style="margin-top:14px">Data vintage \u2014 why some values look old</h3>'
+      + dataVintageHtml(blob)
       + '<div class="note" style="margin-top:10px">Every satellite slice is a 2 km daily CyAN grid from NOAA '
       + 'CoastWatch, which publishes roughly 11 days behind real time. Absent grid cells mean <em>no satellite '
       + 'retrieval</em> (cloud or land), not clean water.</div>'

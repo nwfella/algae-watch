@@ -294,6 +294,26 @@ function main() {
   const merged = AW.deepMerge(AW.defaultState(blob), { mapView: fitted });
   check(merged.mapView && merged.mapView.lon0 === fitted.lon0, 'a saved mapView survives deepMerge for restore');
 
+  // ------------------------------------------- "why does this look old?" panel
+  check(/Data vintage/.test(rendered.map), 'map view carries a data-vintage panel');
+  check(/CyAN satellite/.test(rendered.map) && /USGS sensors/.test(rendered.map),
+        'vintage panel lists each federal source separately');
+  check(/(days? old|mo old|yr old|today)/.test(rendered.map), 'vintage panel shows human ages');
+  check(/median age/.test(rendered.map), 'vintage panel reports the lab-result median age');
+  check(/11 days behind real time/.test(rendered.map), 'vintage panel explains the satellite publication lag');
+  check(/effectively dead/.test(rendered.map), 'vintage panel explains the dead sensor feed');
+
+  // Naive timestamps must be read as UTC: mixing local and UTC parsing made a
+  // same-day NWS alert render as "future-dated".
+  eq(AW.fmtAge('2026-09-14T00:21:00', '2026-09-14T01:14:03Z'), 'today',
+     'a naive (zoneless) timestamp is interpreted as UTC, not local time');
+  eq(AW.fmtAge('2026-09-13', '2026-09-14T01:14:03Z'), '1 day old',
+     'a date-only timestamp is interpreted as UTC midnight');
+  check(!/future-dated/.test(rendered.map), 'no value renders as "future-dated"');
+  check(!/future-dated/.test(rendered.watchlist), 'no watchlist row renders as "future-dated"');
+  check(/NWS alerts/.test(rendered.map) && /today/.test(rendered.map),
+        'the real-time source reports as current in the vintage panel');
+
   report();
 }
 
