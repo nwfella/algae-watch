@@ -348,6 +348,23 @@ function main() {
   check(mapboxInner !== null && /id="maptiles"/.test(mapboxInner) && /id="awmap"/.test(mapboxInner),
         'the basemap layer and the canvas are both children of the map box');
 
+  // ---- pins and basemap must travel together during a drag -----------------
+  // REGRESSION: the drag handler called drawMap() only, so the pins moved while
+  // the basemap sat still until pointerup.
+  // Slice from the pointermove listener to the NEXT listener registration --
+  // the handler body itself contains nested `});` (clampView calls), so
+  // stopping at the first one truncates the slice.
+  const pmStart = template.indexOf("canvas.addEventListener('pointermove'");
+  const pmEnd = template.indexOf("canvas.addEventListener('pointerup'", pmStart);
+  const pmBody = (pmStart < 0 || pmEnd < 0) ? null : template.slice(pmStart, pmEnd);
+  check(pmBody !== null, 'the drag handler can be located in the template');
+  check(pmBody !== null && /tOffX/.test(pmBody) && /tileHost/.test(pmBody),
+        'the drag handler moves the basemap in tandem with the pins');
+  check(pmBody !== null && /var k = ps\.d \/ pinchDist/.test(pmBody) && /k \* \(ps\.mx - pinchMid\.x\)/.test(pmBody),
+        'two-finger drag scales the midpoint travel by the zoom factor');
+  check(/host\.style\.transform = ''/.test(template),
+        'every fresh tile render clears the drag offset (no compounding)');
+
   // hit-testing
   const target = watchPts[0];
   const tp = AW.project(target.lon, target.lat, 800, 400, fitted);

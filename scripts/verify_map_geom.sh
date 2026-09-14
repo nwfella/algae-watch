@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 # Geometry gate for the map stack. Renders the baked page in real Chrome and
-# asserts that the canvas, the basemap tile layer and the .mapbox frame line up,
-# and that the canvas background is see-through.
+# asserts:
+#   * the canvas, the basemap tile layer and the .mapbox frame line up;
+#   * the canvas background is translucent (it must not hide the basemap);
+#   * the tiles share ONE coordinate system with the canvas pins;
+#   * during a DRAG the pins and the basemap travel together, not just on release.
 #
-# This is the check that WOULD have caught the reported "large black box over
-# the map": the canvas filled its whole surface with opaque #0d1420 while sitting
-# on top of the tile layer, and it was also clamped narrower than the tile
-# layer, which projected the basemap at the wrong scale.
+# This is the check that would have caught the reported "large black box over the
+# map" (opaque canvas stacked over the tile layer, clamped narrower than it) and
+# the follow-up report that "the points shift but the map does not".
 #
 # Usage: bash scripts/verify_map_geom.sh
 set -u
@@ -40,7 +42,15 @@ print('canvas     :', d.get('canvas'))
 print('tilesLayer :', d.get('tilesLayer'), 'display=', d.get('tilesDisplay'), 'opacity=', d.get('tilesOpacity'))
 print('tiles      : %s placed, %s loaded, z=%s' % (d.get('tileCount'), d.get('tilesLoaded'), d.get('tileZoom')))
 print('bgPixel    :', d.get('bgPixel'), '(alpha 115 = 0.45 translucent; 255 = opaque black box)')
-print('zoom/pan   : zoom=%s pan=%s' % (d.get('zoomWorks'), d.get('panWorks')))
+print('zoom       : %s (%s -> %s), buttons=%s' % (d.get('zoomWorks'), d.get('spanBefore'), d.get('spanAfterWheel'), d.get('ctlButtons')))
+print('drag       : viewMoved=%s tilesMoved=%s' % (d.get('midDragViewMoved'), d.get('midDragTilesMoved')))
+print('             mid-drag tile offset %s vs view shift %spx (delta %s)'
+      % (d.get('midDragOffset'), d.get('midDragViewShiftPx'), d.get('midDragDelta')))
+print('             transform on release: %s' % d.get('postDragTransform'))
+print('align      : before=%s after=%s' % (d.get('tileAlignBefore'), d.get('tileAlignAfter')))
+print('pinch      : %s (%s -> %s, %sx); pinned point should sit at x=%s, sits at x=%s (delta %spx)'
+      % (d.get('pinchWorks'), d.get('pinchSpanBefore'), d.get('pinchSpanAfter'), d.get('pinchFactor'),
+         d.get('pinchAnchorExpectedX'), d.get('pinchAnchorActualX'), d.get('pinchAnchorDeltaX')))
 if d.get('err'):
     print('ERR        :', d['err'])
 
@@ -80,8 +90,37 @@ if bp:
     ok('canvas tint is the dark navy wash, not black', bp[0] < 60 and bp[2] < 80, 'rgb=%s' % bp[:3])
 ok('basemap layer is not hidden by the watchdog', d.get('tilesDisplay') != 'none', 'display=%s' % d.get('tilesDisplay'))
 ok('tiles actually loaded', (d.get('tilesLoaded') or 0) > 0, '%s/%s' % (d.get('tilesLoaded'), d.get('tileCount')))
-ok('wheel zoom still works', d.get('zoomWorks') is True)
-ok('drag pan still works', d.get('panWorks') is True)
+ok('wheel zoom works', d.get('zoomWorks') is True)
+
+# ---- tiles and pins must share one coordinate system ------------------------
+for tag, key in (('before', 'tileAlignBefore'), ('after a drag', 'tileAlignAfter')):
+    a = d.get(key)
+    ok('a tile edge lands where the canvas projects that longitude (%s)' % tag,
+       bool(a) and abs(a['diff']) <= 2.0,
+       'expected x=%s, painted x=%s, diff=%s px' % (a and a['expected'], a and a['actual'], a and a['diff']))
+
+# ---- tandem drag ------------------------------------------------------------
+ok('dragging actually moves the view', d.get('midDragViewMoved') is True)
+ok('basemap moves DURING the drag, not only on release', d.get('midDragTilesMoved') is True,
+   'mid-drag transform %s' % d.get('midDragTransform'))
+ok('basemap offset matches the view shift while dragging',
+   d.get('midDragDelta') is not None and abs(d.get('midDragDelta')) <= 2.0,
+   'delta %s px (tiles %s vs view %s)' % (d.get('midDragDelta'), d.get('midDragOffset'), d.get('midDragViewShiftPx')))
+ok('drag offset is cleared on release (no double offset)', d.get('postDragOffsetCleared') is True,
+   'transform=%s' % d.get('postDragTransform'))
+ua, ca = d.get('tileUnionAfter'), can
+ok('tiles still cover the canvas after the drag',
+   bool(ua and ca) and ua['x'] <= ca['x'] + 3 and (ua['x'] + ua['w']) >= (ca['x'] + ca['w']) - 6,
+   'union x %s..%s vs canvas x %s..%s' % (ua and ua['x'], ua and (ua['x'] + ua['w']), ca and ca['x'], ca and (ca['x'] + ca['w'])))
+
+# ---- two-finger pinch (the on-page hint promises it) -------------------------
+ok('two-finger pinch zooms', d.get('pinchWorks') is True,
+   'span %s -> %s (%sx)' % (d.get('pinchSpanBefore'), d.get('pinchSpanAfter'), d.get('pinchFactor')))
+ok('the geography under the fingers follows them (two-finger drag, not just zoom)',
+   d.get('pinchAnchored') is True,
+   'pinned point expected x=%s, actual x=%s, delta %spx (y delta %spx)'
+   % (d.get('pinchAnchorExpectedX'), d.get('pinchAnchorActualX'),
+      d.get('pinchAnchorDeltaX'), d.get('pinchAnchorDeltaY')))
 
 print()
 if fails:

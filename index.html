@@ -876,7 +876,19 @@ ul.tight li{margin:3px 0}
     }
     function wireMap(canvas, w, h, ix, u, repaint) {
       if (!canvas) return;
-      var dragging = false, moved = 0, lastX = 0, lastY = 0;
+      var dragging = false, moved = 0, lastX = 0, lastY = 0, tOffX = 0, tOffY = 0;
+      var tileHost = document.getElementById('maptiles');
+      var ptrs = {}, pinchDist = 0, pinchMid = null;   // live pointers, for pinch
+      function pinchState() {
+        var p = Object.keys(ptrs).map(function (k) { return ptrs[k]; });
+        if (p.length < 2) return null;
+        var dx = p[0].x - p[1].x, dy = p[0].y - p[1].y;
+        return { d: Math.sqrt(dx * dx + dy * dy), mx: (p[0].x + p[1].x) / 2, my: (p[0].y + p[1].y) / 2 };
+      }
+      function forgetPointer(e) {
+        if (e && e.pointerId !== undefined) delete ptrs[e.pointerId];
+        endDrag();
+      }
       canvas.addEventListener('wheel', function (e) {
         e.preventDefault();
         var r = canvas.getBoundingClientRect();
@@ -887,35 +899,99 @@ ul.tight li{margin:3px 0}
         mapRedraw(canvas, w, h, ix);
       }, { passive: false });
       canvas.addEventListener('pointerdown', function (e) {
+        ptrs[e.pointerId] = { x: e.clientX, y: e.clientY };
         dragging = true; moved = 0; lastX = e.clientX; lastY = e.clientY;
+        tOffX = 0; tOffY = 0;
+        // Seed the pinch baseline as soon as the SECOND finger lands, otherwise
+        // the first move only initialises the distance and the gesture appears
+        // to do nothing for a frame.
+        var ps0 = pinchState();
+        pinchDist = ps0 ? ps0.d : 0;
+        pinchMid = ps0 ? { x: ps0.mx, y: ps0.my } : null;
         if (canvas.setPointerCapture) { try { canvas.setPointerCapture(e.pointerId); } catch (err) {} }
       });
       canvas.addEventListener('pointermove', function (e) {
+        if (ptrs[e.pointerId]) ptrs[e.pointerId] = { x: e.clientX, y: e.clientY };
+        // TWO-FINGER PINCH: zoom about the midpoint and never pan, so the point
+        // under the fingers stays put. The hint advertises pinch, so it has to
+        // actually work rather than silently falling through to a drag.
+        var ps = pinchState();
+        if (ps) {
+          var pr = canvas.getBoundingClientRect();
+          if (pinchDist > 0 && ps.d > 0 && pinchMid) {
+            var k = ps.d / pinchDist;
+            mapView = zoomView(mapView, k,
+              (ps.mx - pr.left) / Math.max(pr.width, 1),
+              (ps.my - pr.top) / Math.max(pr.height, 1));
+            // TWO-FINGER DRAG: carry the geography that was under the old
+            // midpoint over to the new one so it stays under the fingers. The
+            // travel must be scaled by k as well -- the content is k times
+            // bigger now, so the midpoint delta has to be magnified to match.
+            // (Using the raw delta left the pinned point exactly where it
+            // started, which is what the geometry gate caught.)
+            var px = k * (ps.mx - pinchMid.x) / Math.max(pr.width, 1);
+            var py = k * (ps.my - pinchMid.y) / Math.max(pr.height, 1);
+            var spanX = mapView.lon1 - mapView.lon0, spanY = mapView.my0 - mapView.my1;
+            mapView = clampView({
+              lon0: mapView.lon0 - px * spanX, lon1: mapView.lon1 - px * spanX,
+              my0: mapView.my0 + py * spanY, my1: mapView.my1 + py * spanY
+            });
+            persistView();
+            mapRedraw(canvas, w, h, ix);
+          }
+          pinchDist = ps.d;
+          pinchMid = { x: ps.mx, y: ps.my };
+          dragging = false;
+          tOffX = 0; tOffY = 0;
+          return;
+        }
         if (!dragging) return;
         var dx = e.clientX - lastX, dy = e.clientY - lastY;
         lastX = e.clientX; lastY = e.clientY;
         moved += Math.abs(dx) + Math.abs(dy);
+        // TANDEM: the pins and the basemap must travel together. Rebuilding every
+        // <img> on each pointermove flickers, so the tile layer is TRANSLATED --
+        // and by the pixel shift the VIEW ACTUALLY TOOK, not the raw pointer
+        // delta, otherwise the two desync wherever clampView() refuses to move.
+        var lon0Before = mapView.lon0, my0Before = mapView.my0;
         mapView = panView(mapView, dx, dy, w, h);
+        var spanX = mapView.lon1 - mapView.lon0, spanY = mapView.my0 - mapView.my1;
+        tOffX += (lon0Before - mapView.lon0) / spanX * w;
+        tOffY += (mapView.my0 - my0Before) / spanY * h;
         drawMap(canvas, BLOB, ix, mapView, w, h);
+        if (tileHost) {
+          if (Math.abs(tOffX) > 256 || Math.abs(tOffY) > 256) {
+            // Long drag: re-tile for the current view so the edges stay covered.
+            // addTiles() clears the offset, so this is seamless, not a jump.
+            addTiles(tileHost, w, h);
+            tOffX = 0; tOffY = 0;
+          } else {
+            tileHost.style.transform =
+              'translate(' + tOffX.toFixed(1) + 'px,' + tOffY.toFixed(1) + 'px)';
+          }
+        }
       });
       function endDrag() {
         if (!dragging) return;
         dragging = false;
+        tOffX = 0; tOffY = 0;
         persistView();
         mapRedraw(canvas, w, h, ix);
       }
       canvas.addEventListener('pointerup', function (e) {
-        var wasDrag = moved > 6;                 // a drag is not a click
+        delete ptrs[e.pointerId];
+        var wasDrag = moved > 6;
+        var wasPinch = pinchDist > 0;            // a pinch is not a click
         endDrag();
-        if (wasDrag) return;
+        if (wasDrag || wasPinch) return;
         var r = canvas.getBoundingClientRect();
         var hit = nearestSite(ix,
           (e.clientX - r.left) / Math.max(r.width, 1) * w,
           (e.clientY - r.top) / Math.max(r.height, 1) * h, w, h, 16, mapView);
         if (hit) { u.site = hit.id; u.view = 'site'; saveState(u); repaint(); }
       });
-      canvas.addEventListener('pointercancel', endDrag);
-      canvas.addEventListener('pointerleave', endDrag);
+      canvas.addEventListener('pointercancel', forgetPointer);
+      canvas.addEventListener('pointerleave', forgetPointer);
       canvas.addEventListener('dblclick', function (e) {
         var r = canvas.getBoundingClientRect();
         mapView = zoomView(mapView, 1.6,
@@ -970,6 +1046,7 @@ ul.tight li{margin:3px 0}
       }
       host.innerHTML = html;
       host.style.display = '';
+      host.style.transform = '';   // every fresh render starts untranslated
       Array.prototype.forEach.call(host.querySelectorAll('img'), function (im) {
         // A CACHED image can finish loading before this handler is attached, so
         // `onload` alone never fires and `loaded` stays 0 - the 2.5s watchdog
