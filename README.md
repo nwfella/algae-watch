@@ -167,9 +167,10 @@ No data is fetched at runtime; everything comes from the baked blob.
 ## Verify
 
 ```bash
-python collector/bake.py        # inject the blob
-node scripts/verify_site.js     # Phase 1 build gate  -> exit 0
-node scripts/aw_test.js         # Phase 2 harness     -> exit 0
+python collector/bake.py              # inject the blob
+node scripts/verify_site.js           # Phase 1 build gate  -> exit 0
+node scripts/aw_test.js               # Phase 2 harness     -> exit 0 (102 assertions)
+bash scripts/verify_map_geom.sh       # map geometry gate   -> exit 0 (real Chrome)
 ```
 
 `scripts/aw_test.js` loads the **baked** artifact, extracts the real blob,
@@ -181,6 +182,29 @@ implementation would fail:
   only) — proving no fabricated pixels;
 - a mixed grid must issue **exactly three** (background + the two retrieved
   cells).
+
+### Map geometry gate
+
+`scripts/verify_map_geom.sh` renders the baked page in real Chrome, measures the
+`.mapbox` frame, the canvas and the basemap tile layer, and asserts they line up.
+It exists because of a reported defect — *"the map is overlaid with a large black
+box"* — which was **three** stacked bugs, none visible to the JSON gates:
+
+1. `drawMap()` filled the entire canvas with opaque `#0d1420`, and the canvas is
+   stacked **above** the basemap tile layer, so the whole map rendered as a flat
+   box. The background is now `rgba(13,20,32,0.45)`: the basemap reads through
+   (probe reads alpha **115**, not 255) while the data ramp still pops.
+2. the canvas width was clamped to 1000px while the tile layer is absolutely
+   positioned to the **full** map box, so tiles were projected at the wrong
+   scale/offset and stray fragments showed along the right and bottom edges;
+3. the pan/zoom hint sat **inside** `.mapbox` as an in-flow sibling, making the
+   box taller than the canvas and leaving a band of basemap along the bottom.
+
+The gate therefore asserts: canvas spans the box, layer size == canvas size,
+tiles cover the canvas on both axes, rendered tile width matches the Mercator
+expectation within 3%, background alpha is translucent, and pan/zoom still work.
+Cached tiles are counted via `img.complete`, so the "no tiles loaded" watchdog
+can no longer hide a basemap that actually loaded.
 
 ## Browser verification (Chrome headless, 2026-09-11)
 
