@@ -31,10 +31,17 @@ GOV_EXCEPTION = "www.waterqualitydata.us"
 SOURCES = [
     {
         "id": "cyan",
-        "name": "NOAA CoastWatch CyAN",
+        "name": "NOAA CoastWatch CyAN (2 km science-quality)",
         "url": "https://coastwatch.noaa.gov/erddap/griddap/noaacwNPPN20S3ASCIDINEOF2kmDaily.csv",
         "agency": "NOAA",
         "freshness_budget_hours": 72,  # <= 3 days
+    },
+    {
+        "id": "nrt",
+        "name": "NOAA CoastWatch VIIRS near-real-time chlorophyll (9 km)",
+        "url": "https://coastwatch.noaa.gov/erddap/griddap/noaacwNPPN20VIIRSDINEOFDaily.csv",
+        "agency": "NOAA",
+        "freshness_budget_hours": 120,  # <= 5 days (measured lag ~3.7 d)
     },
     {
         "id": "wqp",
@@ -58,6 +65,42 @@ SOURCES = [
         "freshness_budget_hours": 24,  # <= 24 h
     },
 ]
+
+# Two satellite layers, deliberately kept separate because they trade resolution
+# against freshness. Measured 2026-09-14 on NOAA CoastWatch ERDDAP:
+#   sq2km  science-quality, 2 km, newest 2026-09-03 -> 11.7 days behind
+#   nrt9km near-real-time,  9 km, newest 2026-09-11 ->  3.7 days behind
+# The 2 km product is the MAIN layer: at 9 km a small inland lake is one pixel or
+# none, which is exactly what CyAN-style inland monitoring exists to avoid.
+# Neither is "live" in the browser: ERDDAP sends no CORS header, so both must be
+# baked server-side by the refresh job.
+SAT_DATASETS = [
+    {
+        "id": "sq2km",
+        "source_id": "cyan",
+        "dataset_id": "noaacwNPPN20S3ASCIDINEOF2kmDaily",
+        "res_km": 2,
+        "kind": "science_quality",
+        "label": "VIIRS + OLCI science-quality, 2 km",
+        "short": "2 km science-quality",
+        "url": "https://coastwatch.noaa.gov/erddap/griddap/noaacwNPPN20S3ASCIDINEOF2kmDaily.csv",
+    },
+    {
+        "id": "nrt9km",
+        "source_id": "nrt",
+        "dataset_id": "noaacwNPPN20VIIRSDINEOFDaily",
+        "res_km": 9,
+        "kind": "near_real_time",
+        "label": "VIIRS near-real-time, 9 km",
+        "short": "9 km near-real-time",
+        "url": "https://coastwatch.noaa.gov/erddap/griddap/noaacwNPPN20VIIRSDINEOFDaily.csv",
+    },
+]
+
+# The layer the map opens on and the only one with anomaly baselines.
+MAIN_SAT_ID = SAT_DATASETS[0]["id"]
+SAT_BY_ID = {s["id"]: s for s in SAT_DATASETS}
+BUDGET_HOURS = {s["id"]: s["freshness_budget_hours"] for s in SOURCES}
 
 # Three characteristics are expected to return rows. Anatoxin-a is the one
 # legitimately-empty characteristic, so it is declared with expect_zero.
@@ -544,40 +587,56 @@ CYAN_INFO_URL = (
 )
 
 
-def cyan_available_through() -> str:
-    """Newest date the CyAN dataset actually serves.
+def sat_available_through(dataset_id: str) -> str:
+    """Newest date a CoastWatch satellite dataset actually serves.
 
-    The dataset LAGS real time — observed on 2026-09-11 its time axis ended
-    2026-08-31, an ~11 day publication lag. Requesting 'yesterday' therefore
-    fails with HTTP 404 "Constraint ... is greater than the axis maximum".
+    These datasets LAG real time. Observed 2026-09-14: the 2 km science-quality
+    product's axis ended 2026-09-03 (11.7 days behind) and the near-real-time
+    product's ended 2026-09-11 (3.7 days behind). Requesting 'yesterday'
+    therefore fails with HTTP 404 "Constraint ... is greater than the axis
+    maximum", which is why the window is clamped to the axis max.
     """
-    text = http_get(CYAN_INFO_URL, timeout=90).decode("utf-8", errors="replace")
+    text = http_get(sat_info_url(dataset_id), timeout=90).decode("utf-8", errors="replace")
     for line in text.splitlines():
         parts = [p.strip() for p in line.split(",")]
         if len(parts) >= 5 and parts[2] == "time_coverage_end":
             return parts[4].strip()[:10]
-    raise SystemExit("fail loudly: CyAN info response has no time_coverage_end")
+    raise SystemExit(f"fail loudly: {dataset_id} info response has no time_coverage_end")
 
 
-def cyan_window_end(now: datetime, offline: bool) -> str:
+def sat_info_url(dataset_id: str) -> str:
+    return f"https://coastwatch.noaa.gov/erddap/info/{dataset_id}/index.csv"
+
+
+def cyan_available_through() -> str:
+    """Back-compat: newest date the MAIN (2 km science-quality) layer serves."""
+    return sat_available_through(SAT_DATASETS[0]["dataset_id"])
+
+
+def cyan_window_end(now: datetime, offline: bool, dataset_id: str | None = None) -> str:
     """Newest date to request: never later than the dataset's axis max."""
     yesterday = (now - timedelta(days=1)).strftime("%Y-%m-%d")
     if offline:
         return yesterday
-    return min(yesterday, cyan_available_through())
+    return min(yesterday, sat_available_through(dataset_id or SAT_DATASETS[0]["dataset_id"]))
 
 
-def load_cyan(offline: bool, watchlist: list[dict], now: datetime, pad: float, max_requests: int, window: int = 7) -> list[dict]:
+def load_cyan(offline: bool, watchlist: list[dict], now: datetime, pad: float, max_requests: int, window: int = 7, spec: dict | None = None) -> list[dict]:
     """Fetch a padded bbox slice per watchlist site and form a weekly composite.
+
+    `spec` selects which CoastWatch dataset to read (see SAT_DATASETS); entries
+    carry the layer id so the UI can keep the 2 km and 9 km layers separate and
+    never present one layer's date as another's.
 
     The composite is the cell-wise mean of non-null values across the rolling
     window; a cell with no retrieval anywhere stays null (never 0).
     """
+    spec = spec or SAT_DATASETS[0]
     window = max(window, 1)
     sat_entries: list[dict] = []
     requests = 0
     latest_date = (now - timedelta(days=1)).strftime("%Y-%m-%d")
-    window_end = cyan_window_end(now, offline)
+    window_end = cyan_window_end(now, offline, spec["dataset_id"])
     window_end_dt = datetime.fromisoformat(window_end)
 
     for site in watchlist:
@@ -606,10 +665,7 @@ def load_cyan(offline: bool, watchlist: list[dict], now: datetime, pad: float, m
                     f"chlor_a%5B({date})%5D%5B(0.0)%5D"
                     f"%5B({lat_lo}):1:({lat_hi})%5D%5B({lon_lo}):1:({lon_hi})%5D"
                 )
-                url = (
-                    "https://coastwatch.noaa.gov/erddap/griddap/"
-                    f"noaacwNPPN20S3ASCIDINEOF2kmDaily.csv?{query}"
-                )
+                url = f"{spec['url']}?{query}"
                 body = http_get(url, ua=BROWSER_UA).decode("utf-8", errors="replace")
                 requests += 1
                 dated_grids.append((date, parse_cyan_csv(body)))
@@ -627,7 +683,10 @@ def load_cyan(offline: bool, watchlist: list[dict], now: datetime, pad: float, m
             "date": max(days_with_data) if days_with_data else None,
             "bbox": bbox,
             "grid": grid,
-            "res_km": 2,
+            "res_km": spec["res_km"],
+            "dataset": spec["id"],
+            "source_id": spec["source_id"],
+            "layer": spec["short"],
             "mean": mean,
             "days_with_data": len(days_with_data),
             "window_days": len(dated_grids),
@@ -845,14 +904,13 @@ def source_last_updated(observations: list[dict], sat_entries: list[dict]) -> di
     last: dict[str, str] = {}
     for src in SOURCES:
         src_obs = [o["ts"] for o in observations if o["source_id"] == src["id"] and o["ts"]]
-        if src["id"] == "cyan":
-            for s in sat_entries:
-                if s.get("date"):
-                    src_obs.append(s["date"])
-        if src_obs:
-            last[src["id"]] = max(src_obs)
-        else:
-            last[src["id"]] = ""
+        # Each satellite layer reports the newest day that ACTUALLY returned a
+        # value, keyed by its own source id, so the two layers cannot borrow
+        # each other's freshness.
+        for s in sat_entries:
+            if s.get("source_id", "cyan") == src["id"] and s.get("date"):
+                src_obs.append(s["date"])
+        last[src["id"]] = max(src_obs) if src_obs else ""
     return last
 
 
@@ -882,9 +940,10 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="AlgaeWatch Phase 1 collector")
     parser.add_argument("--offline", action="store_true", help="read _probe/*.csv + cached fixtures instead of the network")
     parser.add_argument("--now", default=None, help="ISO-8601 UTC reference timestamp (default: now)")
-    parser.add_argument("--window", type=int, default=7, help="CyAN rolling window days (default 7)")
-    parser.add_argument("--pad", type=float, default=0.3, help="CyAN bbox padding in degrees (default 0.3)")
-    parser.add_argument("--max-requests", type=int, default=None, help="cap on CyAN requests (default: watchlist sites x window)")
+    parser.add_argument("--window", type=int, default=7, help="satellite rolling window days (default 7)")
+    parser.add_argument("--pad", type=float, default=0.3, help="satellite bbox padding in degrees (default 0.3)")
+    parser.add_argument("--max-requests", type=int, default=None, help="cap on satellite requests PER LAYER (default: watchlist sites x window)")
+    parser.add_argument("--layers", default=None, help="comma-separated satellite layer ids to collect (default: all)")
     parser.add_argument("--allowlist-check", metavar="FILE", help="validate every sources[].url in a JSON blob against the .gov allowlist, then exit")
     args = parser.parse_args()
 
@@ -913,7 +972,16 @@ def main() -> int:
     wqp_rows, stations = load_wqp_results(args.offline, now)
     usgs_obs, usgs_meta = load_usgs(args.offline)
     nws_alerts = load_nws(args.offline)
-    sat_entries = load_cyan(args.offline, watchlist, now, args.pad, args.max_requests, args.window)
+
+    want = [s.strip() for s in args.layers.split(",")] if args.layers else None
+    specs = [s for s in SAT_DATASETS if not want or s["id"] in want]
+    if not specs:
+        raise SystemExit(f"fail loudly: --layers {args.layers!r} matches no SAT_DATASETS id")
+    sat_entries: list[dict] = []
+    for spec in specs:
+        sat_entries.extend(
+            load_cyan(args.offline, watchlist, now, args.pad, args.max_requests, args.window, spec)
+        )
 
     observations: list[dict] = list(wqp_rows)
     observations.extend(usgs_obs)
@@ -925,18 +993,21 @@ def main() -> int:
                 obs["stale"] = is_stale(obs["ts"], budget, now)
 
     for s in sat_entries:
+        spec = SAT_BY_ID[s["dataset"]]
         obs = {
             "site_id": s["site_id"],
             "param": "cyan_index",
             "value": s["mean"],
             "unit": "mg m^-3",
             "ts": s["date"],
-            "source_id": "cyan",
+            "source_id": spec["source_id"],
+            "dataset": spec["id"],
             "method": "satellite",
+            "res_km": spec["res_km"],
         }
         if s.get("synthetic"):
             obs["synthetic"] = True
-        obs["stale"] = is_stale(obs["ts"], 72, now)
+        obs["stale"] = is_stale(obs["ts"], BUDGET_HOURS[spec["source_id"]], now)
         observations.append(obs)
 
     alerts = build_alerts(observations, criteria, watchlist)
@@ -954,6 +1025,10 @@ def main() -> int:
 
     baselines = []
     for s in sat_entries:
+        # Baselines track the MAIN layer only, so the anomaly view compares like
+        # with like instead of mixing a 2 km and a 9 km retrieval.
+        if s.get("dataset") != MAIN_SAT_ID:
+            continue
         mean = s["mean"]
         if mean is None or not s.get("date"):
             continue
@@ -968,11 +1043,39 @@ def main() -> int:
                 "mean": mean,
                 "p90": mean,
                 "years": 1,
+                "dataset": s.get("dataset"),
+                "layer": s.get("layer"),
                 # Single-window stand-in, NOT the 2018-present day-of-year
                 # baseline the spec calls for. Flagged so the UI cannot
                 # present it as a multi-year climatology.
                 "estimated": True,
                 "source": "cyan",
+            }
+        )
+
+    # Describe each satellite layer in the blob so the UI can label them
+    # honestly (resolution, kind, its own newest retrieved day, its own budget)
+    # instead of inventing a single "CyAN" freshness for two different products.
+    sat_layers = []
+    for spec in SAT_DATASETS:
+        entries = [e for e in sat_entries if e.get("dataset") == spec["id"]]
+        dates = [e["date"] for e in entries if e.get("date")]
+        values = [e["mean"] for e in entries if e.get("mean") is not None]
+        sat_layers.append(
+            {
+                "id": spec["id"],
+                "label": spec["label"],
+                "short": spec["short"],
+                "dataset_id": spec["dataset_id"],
+                "res_km": spec["res_km"],
+                "kind": spec["kind"],
+                "source_id": spec["source_id"],
+                "budget_hours": BUDGET_HOURS[spec["source_id"]],
+                "main": spec["id"] == MAIN_SAT_ID,
+                "newest": max(dates) if dates else None,
+                "sites": len(entries),
+                "sites_with_data": len(dates),
+                "sites_with_value": len(values),
             }
         )
 
@@ -991,12 +1094,16 @@ def main() -> int:
                 "bbox": s["bbox"],
                 "grid": s["grid"],
                 "res_km": s["res_km"],
+                "dataset": s.get("dataset"),
+                "source_id": s.get("source_id"),
+                "layer": s.get("layer"),
                 "days_with_data": s.get("days_with_data"),
                 "window_days": s.get("window_days"),
                 **({"synthetic": True} if s.get("synthetic") else {}),
             }
             for s in sat_entries
         ],
+        "sat_layers": sat_layers,
         "alerts": alerts,
         "baselines": baselines,
         "coverage": coverage,

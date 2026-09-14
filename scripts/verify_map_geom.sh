@@ -51,6 +51,9 @@ print('align      : before=%s after=%s' % (d.get('tileAlignBefore'), d.get('tile
 print('pinch      : %s (%s -> %s, %sx); pinned point should sit at x=%s, sits at x=%s (delta %spx)'
       % (d.get('pinchWorks'), d.get('pinchSpanBefore'), d.get('pinchSpanAfter'), d.get('pinchFactor'),
          d.get('pinchAnchorExpectedX'), d.get('pinchAnchorActualX'), d.get('pinchAnchorDeltaX')))
+print('layers     : %s buttons %s' % (d.get('layerButtons'), d.get('layerIds')))
+print('             before: pressed=%s  \"%s\"' % (d.get('pressedBefore'), (d.get('statusBefore') or '')[:78]))
+print('             after : pressed=%s  \"%s\"' % (d.get('pressedAfter'), (d.get('statusAfter') or '')[:78]))
 if d.get('err'):
     print('ERR        :', d['err'])
 
@@ -121,6 +124,29 @@ ok('the geography under the fingers follows them (two-finger drag, not just zoom
    'pinned point expected x=%s, actual x=%s, delta %spx (y delta %spx)'
    % (d.get('pinchAnchorExpectedX'), d.get('pinchAnchorActualX'),
       d.get('pinchAnchorDeltaX'), d.get('pinchAnchorDeltaY')))
+
+# ---- satellite layer switcher ------------------------------------------------
+ok('the map offers a button per satellite layer', (d.get('layerButtons') or 0) >= 2,
+   'buttons: %s' % d.get('layerIds'))
+ok('the main (2 km) layer is selected by default', d.get('pressedBefore') == 'sq2km',
+   'pressed=%s' % d.get('pressedBefore'))
+ok('clicking a layer switches the map to it', d.get('pressedAfter') == 'nrt9km',
+   'pressed=%s' % d.get('pressedAfter'))
+sb, sa = d.get('statusBefore') or '', d.get('statusAfter') or ''
+ok('the map names the layer it is showing', ('2 km' in sb) and ('9 km' in sa),
+   'before="%s" after="%s"' % (sb[:60], sa[:60]))
+ok('the two layers report DIFFERENT retrieval dates (never shared freshness)',
+   bool(sb) and bool(sa) and sb != sa,
+   'before="%s" after="%s"' % (sb[-46:], sa[-46:]))
+ca2, la2 = d.get('canvasAfterSwitch'), d.get('tilesLayerAfterSwitch')
+ok('switching layers keeps the map stack aligned',
+   bool(ca2 and la2) and abs(la2['w'] - ca2['w']) <= 2 and abs(la2['h'] - ca2['h']) <= 2,
+   'layer %sx%s vs canvas %sx%s' % (la2 and la2['w'], la2 and la2['h'], ca2 and ca2['w'], ca2 and ca2['h']))
+bp2 = d.get('bgPixelAfterSwitch')
+ok('the canvas stays translucent after switching layers', bool(bp2) and 90 <= bp2[3] <= 140,
+   'alpha=%s' % (bp2 and bp2[3]))
+ok('tiles are still present after switching layers', (d.get('tilesAfterSwitch') or 0) > 0,
+   '%s tiles' % d.get('tilesAfterSwitch'))
 
 print()
 if fails:

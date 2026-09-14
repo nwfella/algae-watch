@@ -175,6 +175,38 @@
         res.pinchAnchored = Math.abs(res.pinchAnchorDeltaX) <= 2.5 && Math.abs(res.pinchAnchorDeltaY) <= 2.5;
         pt2('pointerup', 600, midY, 12);
         pt2('pointerup', 400, midY, 11);
+
+        // ---- satellite layer switcher -----------------------------------------
+        // The two layers must be independently selectable, and each must report
+        // its OWN retrieval date -- never a shared or borrowed freshness.
+        function statusText() {
+          var st = document.getElementById('mapstatus');
+          return st ? String(st.textContent) : '';
+        }
+        var btns = Array.prototype.slice.call(document.querySelectorAll('[data-layer]'));
+        res.layerButtons = btns.length;
+        res.layerIds = btns.map(function (b) { return b.getAttribute('data-layer'); });
+        res.statusBefore = statusText();
+        res.pressedBefore = (function () {
+          var b = document.querySelector('[data-layer][aria-pressed="true"]');
+          return b ? b.getAttribute('data-layer') : null;
+        })();
+        var nrtBtn = btns.filter(function (b) { return b.getAttribute('data-layer') === 'nrt9km'; })[0];
+        if (nrtBtn) {
+          nrtBtn.click();
+          res.statusAfter = statusText();
+          res.pressedAfter = (function () {
+            var b = document.querySelector('[data-layer][aria-pressed="true"]');
+            return b ? b.getAttribute('data-layer') : null;
+          })();
+          res.canvasAfterSwitch = rect(document.getElementById('awmap'));
+          res.tilesLayerAfterSwitch = rect(document.getElementById('maptiles'));
+          res.tilesAfterSwitch = document.querySelectorAll('#maptiles img').length;
+          try {
+            var d3 = document.getElementById('awmap').getContext('2d').getImageData(2, 2, 1, 1).data;
+            res.bgPixelAfterSwitch = [d3[0], d3[1], d3[2], d3[3]];
+          } catch (e) { res.bgPixelAfterSwitch = null; }
+        }
       } catch (e) { res.err = e.message; }
       publish(res);
     }, 2500);

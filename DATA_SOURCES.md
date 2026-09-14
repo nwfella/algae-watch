@@ -23,10 +23,23 @@ Rule of thumb for the verifier: if the request host doesn't end in `.gov` (excep
 
 ---
 
-## 1. NOAA CoastWatch ERDDAP — CyAN cyanobacteria index ⭐ primary layer
+## 1. NOAA CoastWatch ERDDAP — two chlorophyll-a layers (never blended)
 
-- **Dataset ID:** `noaacwNPPN20S3ASCIDINEOF2kmDaily`
-- **Endpoint:** `https://coastwatch.noaa.gov/erddap/griddap/noaacwNPPN20S3ASCIDINEOF2kmDaily.csv`
+Two products are carried side by side. They trade resolution against freshness, so
+switching datasets for one of them would silently change what the map means.
+
+| Layer id | Dataset ID | Res | Kind | Measured newest (2026-09-14) |
+|---|---|---|---|---|
+| `sq2km` ⭐ **main** | `noaacwNPPN20S3ASCIDINEOF2kmDaily` | 2 km | science quality | 2026-09-03 → **11.7 d behind** |
+| `nrt9km` | `noaacwNPPN20VIIRSDINEOFDaily` | 9 km | near real-time | 2026-09-11 → **3.7 d behind** |
+
+- **Endpoints:** `https://coastwatch.noaa.gov/erddap/griddap/<datasetID>.csv`
+- **Caveat that matters:** at **9 km** a small inland lake is one pixel or none, which
+  is exactly what 2 km inland monitoring exists to avoid — hence 2 km stays the main
+  layer. At 9 km the product is also single-sensor (VIIRS only, no Sentinel-3 OLCI),
+  so more of the grid is model-filled.
+- **Neither can be fetched by the browser** (ERDDAP sends no CORS header), so both are
+  baked by the refresh job; "fresh" means "as fresh as the last run".
 - **Status:** ✅ live — real pixel data pulled
 - **What:** VIIRS (SNPP) cyanobacteria / chlorophyll index. **2 km, global, daily.**
 - **Coverage:** `2018-01-01T12:00:00Z` → `2026-08-31T12:00:00Z`, **3,148 timesteps**; grid 8640 lat × 17280 lon. Variable: `chlor_a` (mg m⁻³).
@@ -159,6 +172,11 @@ of them would have shipped as a silent wrong answer. **Read this before trusting
 endpoint above.**
 
 ## T5. CyAN LAGS real time by ~11 days — never request "yesterday"
+
+> **Update 2026-09-14:** this lag is a property of the **science-quality** product, not
+> of NOAA's data. The near-real-time sibling (`noaacwNPPN20VIIRSDINEOFDaily`) runs
+> ~3.7 days behind at 9 km, and is now carried as a second layer. Clamp to the axis max
+> **per dataset** — each one has its own `time_coverage_end`.
 
 On 2026-09-11 the dataset's time axis ended **2026-08-31**. A query for the previous
 day therefore fails:

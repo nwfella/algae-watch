@@ -209,7 +209,7 @@ ul.tight li{margin:3px 0}
     var m = {
       microcystin: 'Microcystin', cylindrospermopsin: 'Cylindrospermopsin',
       saxitoxin: 'Saxitoxin', 'anatoxin-a': 'Anatoxin-A',
-      cyan_index: 'CyAN satellite index', chlorophyll_a_bluegreen: 'Chlorophyll-a (blue-green)',
+      cyan_index: 'Satellite chlorophyll-a', chlorophyll_a_bluegreen: 'Chlorophyll-a (blue-green)',
       phycocyanin: 'Phycocyanin', beach_hazards_statement: 'NWS Beach Hazards Statement',
       marine_weather_statement: 'NWS Marine Weather Statement'
     };
@@ -226,10 +226,42 @@ ul.tight li{margin:3px 0}
     (b.alerts || []).forEach(function (a) {
       (ix.alertsBySite[a.site_id] = ix.alertsBySite[a.site_id] || []).push(a);
     });
-    (b.satellite || []).forEach(function (s) { ix.satBySite[s.site_id] = s; });
+    (b.satellite || []).forEach(function (s) {
+      // Keyed by LAYER + site, so the 2 km and the 9 km layer can never be
+      // confused for one another.
+      var lid = s.dataset || 'sq2km';
+      ix.satBySite[lid + '|' + s.site_id] = s;
+    });
     (b.baselines || []).forEach(function (s) { ix.baseBySite[s.site_id] = s; });
+    ix.satLayers = (b.sat_layers && b.sat_layers.length) ? b.sat_layers.slice() : deriveSatLayers(b);
+    ix.satLayersById = {};
+    ix.satLayers.forEach(function (L) { ix.satLayersById[L.id] = L; });
     return ix;
   }
+  // Older blobs carry no sat_layers: derive them so the UI degrades honestly
+  // (one unnamed layer) instead of silently showing nothing.
+  function deriveSatLayers(b) {
+    var seen = {}, out = [];
+    (b.satellite || []).forEach(function (s) {
+      var lid = s.dataset || 'sq2km';
+      if (seen[lid]) return;
+      seen[lid] = 1;
+      out.push({
+        id: lid, label: s.layer || 'satellite layer', short: s.layer || 'satellite',
+        res_km: s.res_km, kind: 'unknown', source_id: s.source_id || 'cyan',
+        budget_hours: null, main: out.length === 0, newest: null,
+        sites: 0, sites_with_data: 0
+      });
+    });
+    return out;
+  }
+  function satLayerId(ix, want) {
+    if (want && ix.satLayersById && ix.satLayersById[want]) return want;
+    for (var i = 0; i < ix.satLayers.length; i++) if (ix.satLayers[i].main) return ix.satLayers[i].id;
+    return ix.satLayers.length ? ix.satLayers[0].id : 'sq2km';
+  }
+  function satLayerOf(ix, want) { return (ix.satLayersById || {})[satLayerId(ix, want)] || null; }
+  function satFor(ix, siteId, want) { return ix.satBySite[satLayerId(ix, want) + '|' + siteId] || null; }
   // Newest observation overall, and newest that actually carries a value.
   function latestOf(obs, gen) {
     var latest = null, valued = null;
@@ -355,12 +387,21 @@ ul.tight li{margin:3px 0}
     var z = Math.log(360 / span) / Math.LN2 + Math.log(Math.max(wPx, 256) / 256) / Math.LN2;
     return Math.max(2, Math.min(11, Math.round(z)));
   }
-  function buildMapModel(blob, ix) {
-    var sat = (blob.satellite || []).filter(function (s) { return s && s.grid && s.grid.length; });
+  // Which satellite layer the UI is currently showing. Set by paint(); the map
+  // helpers below are module-level so they read it rather than taking ui.
+  var curSatLayerId = null;
+  function buildMapModel(blob, ix, layer) {
+    var lid = satLayerId(ix, layer === undefined ? curSatLayerId : layer);
+    var L = ix.satLayersById[lid] || null;
+    var sat = (blob.satellite || []).filter(function (s) {
+      return s && s.grid && s.grid.length && (s.dataset || 'sq2km') === lid;
+    });
     var pins = (blob.sites || []).filter(function (s) { return isNum(s.lat) && isNum(s.lon); });
     var noCoords = (blob.sites || []).filter(function (s) { return !isNum(s.lat) || !isNum(s.lon); }).length;
     return {
       sat: sat, pins: pins, noCoords: noCoords,
+      layerId: lid, layer: L,
+      layerSites: (L && L.sites) ? L.sites : sat.length,
       extent: MAP_EXTENT,
       pinAlerts: pins.reduce(function (acc, s) {
         var al = ix.alertsBySite[s.id] || [];
@@ -370,7 +411,7 @@ ul.tight li{margin:3px 0}
       }, {})
     };
   }
-  function drawMap(canvas, blob, ix, view, lw, lh) {
+  function drawMap(canvas, blob, ix, view, lw, lh, layer) {
     if (!canvas || typeof canvas.getContext !== 'function') return 0;
     var ctx = canvas.getContext('2d');
     if (!ctx) return 0;
@@ -381,7 +422,7 @@ ul.tight li{margin:3px 0}
     // NOTE: named vw, not v - the grid loop below already uses `v` for the
     // cell value, and `var` is function-scoped, so `v` would be clobbered.
     var vw = view || defaultView();
-    var model = buildMapModel(blob, ix || indexBlob(blob));
+    var model = buildMapModel(blob, ix || indexBlob(blob), layer);
     var ops = 0;
     ctx.clearRect(0, 0, w, h);
     // TRANSLUCENT wash, not an opaque fill. The canvas is stacked ABOVE the
@@ -442,22 +483,31 @@ ul.tight li{margin:3px 0}
     return best;
   }
   // "Why does this look old?" answered where the data is shown, not buried in
-  // a footnote: each federal source has a different, structural lag.
+  // a footnote. Each satellite LAYER is listed separately with its own lag: the
+  // 2 km and 9 km products publish on very different schedules and must never
+  // share one freshness claim.
   function dataVintageHtml(blob) {
     var f = blob.freshness || {};
     var gen = blob.generated_utc;
-    var labels = { cyan: 'CyAN satellite', wqp: 'WQP lab results', usgs: 'USGS sensors', nws: 'NWS alerts' };
-    var why = {
-      cyan: 'NOAA publishes this ~11 days behind real time',
-      wqp: 'lab results are submitted in batches, months late',
-      usgs: 'the federal sensor feed is effectively dead',
-      nws: 'real time'
-    };
-    var out = [];
-    ['cyan', 'wqp', 'usgs', 'nws'].forEach(function (k) {
-      if (!f[k]) return;
-      out.push(kv(labels[k] + ' \u2014 newest', esc(fmtAge(f[k], gen))
-        + ' <span class="dim">(' + why[k] + ')</span>'));
+    var rows = [];
+    (blob.sat_layers || []).forEach(function (L) {
+      rows.push({
+        key: L.source_id,
+        label: 'Satellite \u2014 ' + (L.short || L.id) + (L.main ? ' (main layer)' : ''),
+        why: L.kind === 'near_real_time'
+          ? 'NOAA publishes this ~4 days behind real time; 9 km cells'
+          : 'NOAA reprocesses this ~12 days behind real time; 2 km cells'
+      });
+    });
+    rows.push({ key: 'wqp', label: 'WQP lab results', why: 'lab results are submitted in batches, months late' });
+    rows.push({ key: 'usgs', label: 'USGS sensors', why: 'the federal sensor feed is effectively dead' });
+    rows.push({ key: 'nws', label: 'NWS alerts', why: 'real time' });
+    var out = [], seen = {};
+    rows.forEach(function (r) {
+      if (!f[r.key] || seen[r.key]) return;
+      seen[r.key] = 1;
+      out.push(kv(r.label + ' \u2014 newest', esc(fmtAge(f[r.key], gen))
+        + ' <span class="dim">(' + r.why + ')</span>'));
     });
     var ages = [];
     (blob.observations || []).forEach(function (o) {
@@ -472,12 +522,43 @@ ul.tight li{margin:3px 0}
     }
     return out.join('');
   }
+  // Layer switcher. Deliberately placed OUTSIDE .mapbox: an in-flow sibling
+  // inside the map box makes it taller than the canvas and exposes a band of
+  // basemap along the bottom edge.
+  function layerSwitchHtml(blob, ix, ui) {
+    var lid = satLayerId(ix, ui.satLayer);
+    var gen = blob.generated_utc;
+    var out = ['<div class="row layertabs" role="group" aria-label="Satellite layer" style="margin:0 0 8px">'
+      + '<span class="dim" style="font-size:12px">Satellite layer:</span>'];
+    ix.satLayers.forEach(function (L) {
+      var on = L.id === lid;
+      var age = L.newest ? fmtAge(L.newest, gen) : 'no data';
+      out.push('<button type="button" class="btn' + (on ? ' primary' : '') + '" data-layer="' + esc(L.id) + '"'
+        + ' aria-pressed="' + (on ? 'true' : 'false') + '"'
+        + ' title="' + esc((L.label || L.id) + ' \u2014 newest retrieved ' + (L.newest || 'n/a')
+          + ' (' + (L.res_km === null || L.res_km === undefined ? '?' : L.res_km) + ' km)') + '">'
+        + esc(L.short || L.id) + ' &middot; ' + esc(age) + '</button>');
+    });
+    out.push('</div>');
+    var sel = satLayerOf(ix, lid);
+    if (sel) {
+      out.push('<div class="maphint dim" style="margin:0 0 8px">Showing <strong>'
+        + esc(sel.label || sel.id) + '</strong> \u2014 <code>' + esc(sel.dataset_id || '') + '</code>'
+        + ' &middot; newest retrieved ' + esc(sel.newest || 'no data')
+        + ' &middot; ' + (sel.kind === 'near_real_time'
+            ? 'fresher (~4 d) but 9 km: a small lake can be one pixel or none'
+            : '2 km inland detail, but NOAA reprocesses it ~12 days behind')
+        + '</div>');
+    }
+    return out.join('');
+  }
   function renderMap(blob, ix, ui) {
     var m = buildMapModel(blob, ix);
-    var satNo = (blob.satellite || []).length - m.sat.length;
+    var satNo = Math.max(0, m.layerSites - m.sat.length);
     var html = bannerHtml(blob) + thresholdFlagHtml(blob);
     html += '<div class="grid cols-2"><div class="card">'
-      + '<h2>CyAN satellite index &amp; watchlist sites</h2>'
+      + '<h2>Satellite chlorophyll-a &amp; watchlist sites</h2>'
+      + layerSwitchHtml(blob, ix, ui)
       + '<div class="mapbox" id="mapbox"><div class="tiles" id="maptiles"></div>'
       + '<canvas id="awmap" width="1000" height="460" aria-label="Cyanobacteria index map"></canvas>'
       + '<div class="mapstatus" id="mapstatus"></div>'
@@ -497,15 +578,18 @@ ul.tight li{margin:3px 0}
       + '</div>'
       + '</div>'
       + '<div class="card"><h2>Coverage right now</h2>'
-      + kv('Satellite slices', m.sat.length + ' of ' + (blob.satellite || []).length + ' requests')
+      + kv('Satellite slices (selected layer)', m.sat.length + ' of ' + m.layerSites + ' requests')
       + kv('Satellite slices with no data', String(satNo))
       + kv('Sites with coordinates', m.pins.length + ' of ' + (blob.sites || []).length)
       + kv('Sites without coordinates (unmappable)', String(m.noCoords))
       + kv('Watchlist sites', String((ui.watch || []).length))
       + '<h3 style="margin-top:14px">Data vintage \u2014 why some values look old</h3>'
       + dataVintageHtml(blob)
-      + '<div class="note" style="margin-top:10px">Every satellite slice is a 2 km daily CyAN grid from NOAA '
-      + 'CoastWatch, which publishes roughly 11 days behind real time. Absent grid cells mean <em>no satellite '
+      + '<div class="note" style="margin-top:10px">Two NOAA CoastWatch products are carried side by side and '
+      + 'never blended: a <strong>2 km science-quality</strong> composite (fine inland detail, but NOAA '
+      + 'reprocesses it ~12 days behind real time) and a <strong>9 km near-real-time</strong> product '
+      + '(~4 days behind, but coarse \u2014 a small lake can be a single pixel or none). Switch with the layer '
+      + 'buttons above; each layer reports its own retrieval date. Absent grid cells mean <em>no satellite '
       + 'retrieval</em> (cloud or land), not clean water.</div>'
       + '</div></div>';
     return html;
@@ -569,7 +653,7 @@ ul.tight li{margin:3px 0}
     }
     var s = ix.byId[id];
     var obs = (ix.obsBySite[id] || []).slice().sort(function (a, b) { return String(b.ts) < String(a.ts) ? -1 : 1; });
-    var sat = ix.satBySite[id];
+    var sat = satFor(ix, id, ui.satLayer);
     var alerts = ix.alertsBySite[id] || [];
     var la = latestOf(obs, gen);
     var bySource = {};
@@ -593,14 +677,16 @@ ul.tight li{margin:3px 0}
       + kv('Observations held', String(obs.length))
       + kv('Sources contributing', Object.keys(bySource).map(function (k) { return k + ':' + bySource[k]; }).join(' · ') || '—')
       + '</div>'
-      + '<div class="card"><h2>Satellite slice</h2>'
+      + '<div class="card"><h2>Satellite slice <span class="dim">'
+      + esc((satLayerOf(ix, ui.satLayer) || {}).short || '') + '</span></h2>'
       + (sat
-        ? kv('Slice date', (sat.date || 'no retrieval in window') + (sat.synthetic ? ' <span class="chip stale">SYNTHETIC</span>' : ''))
+        ? kv('Layer', esc(sat.layer || '—') + ' <span class="dim">(' + esc(sat.dataset || '') + ')</span>')
+          + kv('Slice date', (sat.date || 'no retrieval in window') + (sat.synthetic ? ' <span class="chip stale">SYNTHETIC</span>' : ''))
           + kv('Days with data', (sat.days_with_data === null || sat.days_with_data === undefined) ? '—' : sat.days_with_data + ' of ' + sat.window_days)
           + kv('Resolution', (sat.res_km || '—') + ' km')
           + kv('Grid', sat.grid.length + ' × ' + (sat.grid[0] ? sat.grid[0].length : 0))
           + '<div id="siteChart" class="chartbox"><canvas class="chart" id="awchart" width="640" height="150"></canvas></div>'
-        : '<div class="empty">No CyAN slice for this site in the current build.</div>')
+        : '<div class="empty">No slice for this site in the selected satellite layer.</div>')
       + '</div></div>'
       + '<div class="card" style="margin-top:12px"><h2>Observations <span class="dim">(' + obs.length + ' held'
       + (obs.length > 40 ? ', showing newest 40' : '') + ')</span></h2>'
@@ -622,7 +708,7 @@ ul.tight li{margin:3px 0}
   function renderAnomaly(blob, ix) {
     var rows = [];
     (blob.baselines || []).forEach(function (b) {
-      var sat = ix.satBySite[b.site_id];
+      var sat = satFor(ix, b.site_id, null);   // baselines are main-layer only
       var cur = (sat && isNum(sat.mean)) ? sat.mean : null;
       var dev = (isNum(cur) && isNum(b.mean) && b.mean !== 0) ? (cur - b.mean) / b.mean * 100 : null;
       var s = ix.byId[b.site_id] || { name: b.site_id };
@@ -715,8 +801,10 @@ ul.tight li{margin:3px 0}
       + '<li><strong>Ingest lag.</strong> WQP lab submissions arrive months late: monthly cyanotoxin counts collapse '
       + 'from Nov 2025 to Apr 2026 while a control analyte (Missouri pH) collapses identically. That is reporting '
       + 'lag, not ecology. Never read a quiet month as a clean month.</li>'
-      + '<li><strong>Satellite lag.</strong> The CyAN dataset publishes roughly 11 days behind real time, so the '
-      + 'newest slice is always older than "yesterday".</li>'
+      + '<li><strong>Satellite lag.</strong> Two NOAA products are carried. The 2 km science-quality '
+      + 'composite is reprocessed ~12 days behind real time; the 9 km near-real-time product runs ~4 days '
+      + 'behind at the cost of resolution. Neither can be fetched by the browser (ERDDAP sends no CORS '
+      + 'header), so both are baked by the refresh job and are only as fresh as the last run.</li>'
       + '<li><strong>Monitoring is uneven.</strong> A handful of state programmes generate most of the lab data; '
       + 'most states generate none.</li>'
       + '<li><strong>Live sensors are effectively dead.</strong> Only three USGS continuous algae sensors report '
@@ -745,19 +833,27 @@ ul.tight li{margin:3px 0}
     if (name === 'sources') return renderSources(blob);
     return '<div class="empty">Unknown view.</div>';
   }
-  function viewCount(name, blob) {
+  function viewCount(name, blob, layerId) {
     if (name === 'alerts') return (blob.alerts || []).length;
     if (name === 'watchlist') return 0;
     if (name === 'sources') return (blob.sources || []).length;
     if (name === 'anomaly') return (blob.baselines || []).length;
-    if (name === 'map') return (blob.satellite || []).length;
+    if (name === 'map') {
+      // The badge counts the SELECTED layer, not both layers summed.
+      var want = layerId || 'sq2km', n = 0;
+      (blob.satellite || []).forEach(function (s) {
+        if ((s.dataset || 'sq2km') === want) n++;
+      });
+      return n;
+    }
     return 0;
   }
 
   /* ------------------------------------------------------------------ state */
   function defaultState(blob) {
     var watch = (blob.sites || []).filter(function (s) { return s.watch; }).map(function (s) { return s.id; });
-    return { view: 'map', site: watch.length ? watch[0] : null, watch: watch };
+    // satLayer: which satellite layer the map/site/chart show; null = main layer.
+    return { view: 'map', site: watch.length ? watch[0] : null, watch: watch, satLayer: null };
   }
   function deepMerge(t, o) {
     if (!o || typeof o !== 'object') return t;
@@ -809,13 +905,20 @@ ul.tight li{margin:3px 0}
         + 'confirmed against the EPA source. A blank state means no data was reported \u2014 not that water was clean.';
     }
 
-    tabs.innerHTML = VIEWS.map(function (v) {
-      var n = viewCount(v.id, BLOB);
-      return '<button class="tab" role="tab" data-view="' + v.id + '">' + v.label
-        + (n ? '<span class="n">' + n + '</span>' : '') + '</button>';
-    }).join('');
+    // Re-rendered on every paint so the Map badge tracks the SELECTED layer
+    // instead of summing both satellite layers together.
+    function renderTabs() {
+      tabs.innerHTML = VIEWS.map(function (v) {
+        var n = viewCount(v.id, BLOB, satLayerId(ix, ui.satLayer));
+        return '<button class="tab" role="tab" data-view="' + v.id + '">' + v.label
+          + (n ? '<span class="n">' + n + '</span>' : '') + '</button>';
+      }).join('');
+    }
 
     function paint() {
+      renderTabs();
+      // Must be set BEFORE renderView: the map view reads it to pick a layer.
+      curSatLayerId = satLayerId(ix, ui.satLayer);
       Array.prototype.forEach.call(tabs.querySelectorAll('.tab'), function (b) {
         b.classList.toggle('active', b.dataset.view === ui.view);
       });
@@ -844,9 +947,10 @@ ul.tight li{margin:3px 0}
           // degrees wide, so a CONUS-wide default renders them as specks.
           mapView = fitView((ui.watch || []).map(function (id) { return ix.byId[id]; }), 0.25);
         }
-        drawMap(c, BLOB, ix, mapView, cssW, cssH);
+        drawMap(c, BLOB, ix, mapView, cssW, cssH, curSatLayerId);
         addTiles(document.getElementById('maptiles'), cssW, cssH, mapView);
         wireMap(c, cssW, cssH, ix, ui, paint);
+        wireLayerSwitch();
         updateStatus();
       }
       if (ui.view === 'site') drawChart();
@@ -864,10 +968,29 @@ ul.tight li{margin:3px 0}
       var b = viewBounds(mapView);
       var tiles = document.getElementById('maptiles');
       var noBase = tiles && tiles.style.display === 'none';
+      var L = satLayerOf(ix, ui.satLayer);
+      var nWin = 0;
+      (BLOB.satellite || []).forEach(function (s) {
+        if (L && (s.dataset || 'sq2km') === L.id) nWin++;
+      });
       st.textContent = Math.abs(b.lon1 - b.lon0).toFixed(2) + '\u00b0 \u00d7 '
         + Math.abs(b.lat1 - b.lat0).toFixed(2) + '\u00b0 \u00b7 '
-        + (BLOB.satellite || []).length + ' satellite windows in this build'
+        + nWin + ' windows \u00b7 '
+        + (L ? L.short + ', retrieved ' + (L.newest || 'no data') : 'no satellite layer')
         + (noBase ? ' \u00b7 basemap blocked, grid + pins only' : '');
+    }
+    function wireLayerSwitch() {
+      var lt = document.querySelector('.layertabs');
+      if (!lt) return;   // the element is recreated per paint, so no listener stacking
+      lt.addEventListener('click', function (e) {
+        var b = e.target && e.target.closest ? e.target.closest('[data-layer]') : null;
+        if (!b) return;
+        e.preventDefault();
+        ui.satLayer = b.getAttribute('data-layer');
+        curSatLayerId = satLayerId(ix, ui.satLayer);
+        saveState(ui);
+        paint();
+      });
     }
     function mapRedraw(canvas, w, h, ix) {
       drawMap(canvas, BLOB, ix, mapView, w, h);
@@ -1069,7 +1192,7 @@ ul.tight li{margin:3px 0}
     function drawChart() {
       var c = document.getElementById('awchart');
       if (!c) return;
-      var sat = ix.satBySite[ui.site];
+      var sat = satFor(ix, ui.site, ui.satLayer);
       if (!sat || !sat.grid || !sat.grid.length) return;
       var ctx = c.getContext('2d');
       if (!ctx) return;
@@ -1092,7 +1215,9 @@ ul.tight li{margin:3px 0}
       });
       ctx.fillStyle = '#6868a0';
       ctx.font = '11px sans-serif';
-      ctx.fillText('CyAN index, ' + vals.length + ' retrieved cells (max ' + max.toFixed(2) + ' mg m\u207b\u00b3)', 6, 12);
+      var Lc = satLayerOf(ix, ui.satLayer);
+      ctx.fillText(((Lc && Lc.short) ? Lc.short : 'satellite') + ', ' + vals.length
+        + ' retrieved cells (max ' + max.toFixed(2) + ' mg m\u207b\u00b3)', 6, 12);
     }
 
     tabs.addEventListener('click', function (e) {
@@ -1109,8 +1234,8 @@ ul.tight li{margin:3px 0}
       var un = t.getAttribute && t.getAttribute('data-unwatch');
       var focus = t.getAttribute && t.getAttribute('data-mapfocus');
       if (focus && ix.byId[focus]) {
-        // Frame the site's actual CyAN window (0.6 deg), not just its pin.
-        var sat = ix.satBySite[focus];
+        // Frame the site's actual satellite window (~0.6 deg), not just its pin.
+        var sat = satFor(ix, focus, ui.satLayer);
         var pts = (sat && sat.bbox && sat.bbox.length === 4)
           ? [{ lat: sat.bbox[0], lon: sat.bbox[1] }, { lat: sat.bbox[2], lon: sat.bbox[3] }]
           : [ix.byId[focus]];
@@ -1146,6 +1271,7 @@ ul.tight li{margin:3px 0}
     prettyParam: prettyParam, indexBlob: indexBlob, latestOf: latestOf,
     bannerHtml: bannerHtml, thresholdFlagHtml: thresholdFlagHtml, unverified: unverified,
     project: project, colorFor: colorFor, buildMapModel: buildMapModel, drawMap: drawMap,
+    satFor: satFor, satLayerId: satLayerId, satLayerOf: satLayerOf,
     defaultView: defaultView, viewFromExtent: viewFromExtent, viewBounds: viewBounds,
     clampView: clampView, fitView: fitView, zoomView: zoomView, panView: panView,
     unproject: unproject, tileZoomFor: tileZoomFor, nearestSite: nearestSite,

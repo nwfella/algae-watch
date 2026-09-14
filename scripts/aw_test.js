@@ -260,6 +260,8 @@ function main() {
   // known-limits disclosure is present
   check(/Ingest lag/i.test(rendered.sources), 'sources view discloses the ingest lag');
   check(/11 days behind|behind real time/i.test(rendered.sources), 'sources view discloses the satellite lag');
+  check(/CORS/.test(rendered.sources) && /browser/i.test(rendered.sources),
+        'sources view explains why the satellite layer cannot be fetched live in the browser');
 
   // ------------------------------------------------- map pan / zoom / hit-test
   const ixReal = AW.indexBlob(blob);
@@ -377,13 +379,67 @@ function main() {
   const merged = AW.deepMerge(AW.defaultState(blob), { mapView: fitted });
   check(merged.mapView && merged.mapView.lon0 === fitted.lon0, 'a saved mapView survives deepMerge for restore');
 
+  // --------------------------- two satellite layers, kept strictly separate --
+  // The 2 km science-quality and the 9 km near-real-time product publish on very
+  // different schedules (measured 2026-09-14: 11.7 d vs 3.7 d). Sharing one
+  // freshness claim, or blending their grids, would misstate the data.
+  const layers = blob.sat_layers || [];
+  eq(layers.length, 2, 'the blob carries both satellite layers');
+  const layerById = {};
+  layers.forEach((l) => { layerById[l.id] = l; });
+  const mainIds = layers.filter((l) => l.main).map((l) => l.id);
+  eq(mainIds.length, 1, 'exactly one layer is flagged as main');
+  eq(layerById[mainIds[0]].res_km, 2, 'the main layer is the 2 km science-quality product');
+  const nrtLayers = layers.filter((l) => l.kind === 'near_real_time');
+  eq(nrtLayers.length, 1, 'a near-real-time layer is present');
+  eq(nrtLayers[0].res_km, 9, 'the near-real-time layer is the 9 km product');
+  check(layers.every((l) => l.dataset_id && l.label && l.source_id),
+        'every layer names its NOAA dataset, label and source id');
+  const fresh = blob.freshness || {};
+  check(fresh.cyan && fresh.nrt && fresh.cyan !== fresh.nrt,
+        `the two layers keep separate freshness (2 km ${fresh.cyan} vs 9 km ${fresh.nrt})`);
+  check((blob.satellite || []).length === layers.reduce((n, l) => n + (l.sites || 0), 0),
+        'every satellite slice belongs to exactly one layer');
+  check((blob.satellite || []).every((s) => layerById[s.dataset] && s.res_km === layerById[s.dataset].res_km),
+        'every slice declares a known layer and that layer resolution');
+
+  // satFor must never hand back the other layer's entry.
+  const twoLayer = {
+    sites: [], observations: [], alerts: [], baselines: [], coverage: {}, sources: [],
+    sat_layers: layers,
+    satellite: [
+      { site_id: 'S', dataset: 'sq2km', res_km: 2, date: '2026-09-03', bbox: [40, -90, 40.6, -89.4], grid: [[1, 2]] },
+      { site_id: 'S', dataset: 'nrt9km', res_km: 9, date: '2026-09-11', bbox: [40, -90, 40.6, -89.4], grid: [[3, 4]] }
+    ]
+  };
+  const ix2 = AW.indexBlob(twoLayer);
+  const gotMain = AW.satFor(ix2, 'S', null);
+  const gotNrt = AW.satFor(ix2, 'S', 'nrt9km');
+  check(gotMain && gotMain.res_km === 2, 'satFor(null) returns the main 2 km layer');
+  check(gotNrt && gotNrt.res_km === 9, 'satFor("nrt9km") returns the 9 km layer');
+  check(gotMain.date === '2026-09-03' && gotNrt.date === '2026-09-11',
+        'each layer keeps its own retrieval date');
+  // Painting one layer must draw only that layer's cells.
+  const lc = stubCanvas();
+  const lfit = AW.fitView([{ lat: 40, lon: -90 }, { lat: 40.6, lon: -89.4 }], 0.1);
+  const lops = AW.drawMap(lc.canvas, twoLayer, ix2, lfit, 800, 400, 'nrt9km');
+  check(lops === 3, `painting the 9 km layer draws background + only its 2 cells (${lops} ops)`);
+  const lopsMain = AW.drawMap(lc.canvas, twoLayer, ix2, lfit, 800, 400, 'sq2km');
+  check(lopsMain === 3, `painting the 2 km layer draws background + only its 2 cells (${lopsMain} ops)`);
+  check(/data-layer="sq2km"/.test(rendered.map) && /data-layer="nrt9km"/.test(rendered.map),
+        'the map view offers a button per satellite layer');
+  check(/Showing <strong>/.test(rendered.map), 'the map states which layer is being displayed');
+
   // ------------------------------------------- "why does this look old?" panel
   check(/Data vintage/.test(rendered.map), 'map view carries a data-vintage panel');
-  check(/CyAN satellite/.test(rendered.map) && /USGS sensors/.test(rendered.map),
+  check(/Satellite/.test(rendered.map) && /USGS sensors/.test(rendered.map),
         'vintage panel lists each federal source separately');
+  check(/2 km science-quality/.test(rendered.map) && /9 km near-real-time/.test(rendered.map),
+        'vintage panel lists BOTH satellite layers, each on its own line');
   check(/(days? old|mo old|yr old|today)/.test(rendered.map), 'vintage panel shows human ages');
   check(/median age/.test(rendered.map), 'vintage panel reports the lab-result median age');
-  check(/11 days behind real time/.test(rendered.map), 'vintage panel explains the satellite publication lag');
+  check(/~12 days behind real time/.test(rendered.map) && /~4 days behind real time/.test(rendered.map),
+        'vintage panel explains the two satellite lags separately');
   check(/effectively dead/.test(rendered.map), 'vintage panel explains the dead sensor feed');
 
   // Naive timestamps must be read as UTC: mixing local and UTC parsing made a
