@@ -231,6 +231,69 @@ function main() {
   check(/Ingest lag/i.test(rendered.sources), 'sources view discloses the ingest lag');
   check(/11 days behind|behind real time/i.test(rendered.sources), 'sources view discloses the satellite lag');
 
+  // ------------------------------------------------- map pan / zoom / hit-test
+  const ixReal = AW.indexBlob(blob);
+  const watchPts = (ui.watch || []).map((id) => ixReal.byId[id]).filter(Boolean);
+  const fitted = AW.fitView(watchPts, 0.25);
+  const fb = AW.viewBounds(fitted);
+  check(watchPts.every((s) => s.lon >= fb.lon0 && s.lon <= fb.lon1 && s.lat >= fb.lat0 && s.lat <= fb.lat1),
+        `fitView frames all ${watchPts.length} watchlist sites`);
+  const fitSpan = fb.lon1 - fb.lon0;
+  check(fitSpan < 75, `fitView span is bounded (${fitSpan.toFixed(1)} deg, not the whole globe)`);
+
+  const zb = AW.viewBounds(AW.zoomView(fitted, 2, 0.5, 0.5));
+  check(Math.abs((zb.lon1 - zb.lon0) - fitSpan / 2) < 1e-9, 'zoomView(2x) halves the longitude span');
+  const pb = AW.viewBounds(AW.panView(fitted, 60, 0, 600, 300));
+  check(Math.abs(pb.lon0 - fb.lon0) > 0.5, 'panView shifts the view when you drag');
+
+  const zDeep = AW.viewBounds(AW.zoomView(fitted, 1e9, 0.5, 0.5));
+  check((zDeep.lon1 - zDeep.lon0) > 0.015,
+        `zoom is clamped so the view cannot collapse (min span ${(zDeep.lon1 - zDeep.lon0).toFixed(4)} deg)`);
+  const latClamp = AW.viewBounds(AW.panView(fitted, 0, 1e9, 600, 300));
+  check(latClamp.lat1 <= 85.001 && latClamp.lat0 >= -85.001, 'pan clamps latitude to the Mercator range');
+
+  const pt = AW.project(-90.5, 41.5, 800, 400, fitted);
+  const back = AW.unproject(pt.x, pt.y, 800, 400, fitted);
+  check(Math.abs(back.lon + 90.5) < 1e-9 && Math.abs(back.lat - 41.5) < 1e-9,
+        'project() and unproject() round-trip at a zoomed view');
+  check(AW.tileZoomFor(AW.zoomView(fitted, 8, 0.5, 0.5), 800) > AW.tileZoomFor(AW.defaultView(), 800),
+        'basemap tile zoom rises as you zoom in');
+
+  // Zoomed to a satellite window, the CyAN cells must become genuinely visible
+  // (at CONUS scale a cell is under a pixel wide, which is why the old map
+  // looked empty and unusable).
+  const oneSite = {
+    sites: [], observations: [], alerts: [], baselines: [], coverage: {}, sources: [],
+    satellite: [{ site_id: 'S', date: '2026-09-02', bbox: [41.2, -90.8, 41.8, -90.2],
+                  grid: [[1.5, 2.5], [3.5, 4.5]], res_km: 2 }]
+  };
+  const sfit = AW.fitView([{ lat: 41.2, lon: -90.8 }, { lat: 41.8, lon: -90.2 }], 0.25);
+  const zc = stubCanvas();
+  const zops = AW.drawMap(zc.canvas, oneSite, AW.indexBlob(oneSite), sfit, 800, 400);
+  check(zops === 5, `zoomed to a window: bg + 4 cells painted (${zops} ops)`);
+  const cellW = zc.ops.rects.slice(1).map((r) => r.w);
+  check(cellW.length === 4 && Math.min.apply(null, cellW) > 20,
+        `zoomed cells are large (min ${Math.min.apply(null, cellW).toFixed(0)}px wide vs <1px at CONUS)`);
+
+  // off-screen windows are culled rather than drawn into nowhere
+  const farBlob = JSON.parse(JSON.stringify(oneSite));
+  farBlob.satellite[0].bbox = [10, 10, 10.6, 10.6];
+  const fc = stubCanvas();
+  const fops = AW.drawMap(fc.canvas, farBlob, AW.indexBlob(farBlob), sfit, 800, 400);
+  check(fops === 1, `off-screen windows are culled (${fops} op = background only)`);
+
+  // hit-testing
+  const target = watchPts[0];
+  const tp = AW.project(target.lon, target.lat, 800, 400, fitted);
+  const hit = AW.nearestSite(ixReal, tp.x + 4, tp.y + 4, 800, 400, 16, fitted);
+  check(hit && hit.id === target.id, 'nearestSite() hit-tests the pin under the cursor');
+  check(AW.nearestSite(ixReal, -5000, -5000, 800, 400, 16, fitted) === null,
+        'nearestSite() returns null for a click far from any pin');
+
+  // the saved view must survive a state round-trip so it is restored on reload
+  const merged = AW.deepMerge(AW.defaultState(blob), { mapView: fitted });
+  check(merged.mapView && merged.mapView.lon0 === fitted.lon0, 'a saved mapView survives deepMerge for restore');
+
   report();
 }
 

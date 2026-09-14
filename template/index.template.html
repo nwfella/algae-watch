@@ -87,6 +87,13 @@ select{background:var(--bg3);color:var(--text);border:1px solid var(--border);bo
 canvas.chart{width:100%;height:auto;display:block}
 ul.tight{margin:6px 0 0;padding-left:18px;color:var(--text2);font-size:13px}
 ul.tight li{margin:3px 0}
+.map-wrap{position:relative}
+.mapctl{position:absolute;top:8px;right:8px;display:flex;flex-direction:column;gap:4px;z-index:3}
+.mapctl .btn{min-width:42px;height:30px;padding:0 7px;font-weight:700;background:rgba(19,19,31,.88);border-color:var(--border)}
+.mapctl .btn:hover{border-color:var(--accent);color:#fff}
+.mapbox canvas{cursor:grab;touch-action:none;-webkit-user-select:none;user-select:none}
+.mapbox canvas:active{cursor:grabbing}
+.maphint{font-size:11.5px;margin-top:6px}
 @media (max-width:640px){
   body{font-size:14.5px}
   .wrap,.app{padding:12px}
@@ -137,6 +144,7 @@ ul.tight li{margin:3px 0}
     { id: 'sources', label: 'Sources' }
   ];
   var MAP_EXTENT = { lon0: -125, lon1: -66.5, lat0: 24, lat1: 49.5 };
+  var mapView = null;          // current Mercator view, lazily fitted on first paint
   var COLORS = [
     { max: 1, c: '#155e75', label: '< 1' },
     { max: 3, c: '#0e7490', label: '1–3' },
@@ -256,17 +264,89 @@ ul.tight li{margin:3px 0}
     var r = lat * Math.PI / 180;
     return Math.log(Math.tan(Math.PI / 4 + r / 2));
   }
-  function project(lon, lat, w, h, ext) {
-    ext = ext || MAP_EXTENT;
-    var y0 = mercY(ext.lat1), y1 = mercY(ext.lat0);
+  function project(lon, lat, w, h, view) {
+    var v = view || defaultView();
     return {
-      x: (lon - ext.lon0) / (ext.lon1 - ext.lon0) * w,
-      y: (mercY(lat) - y0) / (y1 - y0) * h
+      x: (lon - v.lon0) / (v.lon1 - v.lon0) * w,
+      y: (mercY(lat) - v.my0) / (v.my1 - v.my0) * h
     };
   }
   function colorFor(v) {
     for (var i = 0; i < COLORS.length; i++) if (v < COLORS[i].max) return COLORS[i].c;
     return COLORS[COLORS.length - 1].c;
+  }
+  // ---- pan / zoom maths -------------------------------------------------
+  // The view lives in Mercator space: {lon0, lon1, my0, my1} with my = mercY(lat).
+  // Keeping latitude in Mercator space keeps the satellite grid, the site pins
+  // and the basemap tiles aligned at every zoom level.
+  function myInv(my) { return (2 * Math.atan(Math.exp(my)) - Math.PI / 2) * 180 / Math.PI; }
+  function defaultView() { return viewFromExtent(MAP_EXTENT); }
+  function viewFromExtent(ext) {
+    return { lon0: ext.lon0, lon1: ext.lon1, my0: mercY(ext.lat1), my1: mercY(ext.lat0) };
+  }
+  function viewBounds(v) {
+    return { lon0: v.lon0, lon1: v.lon1, lat0: myInv(v.my1), lat1: myInv(v.my0) };
+  }
+  function clampView(v) {
+    // CONVENTION: my0 is the NORTH edge, my1 the SOUTH edge, so the height
+    // span is (my0 - my1) and is POSITIVE. Getting this backwards silently
+    // collapses the view (the bug this comment exists to prevent).
+    var MINW = 0.02;                       // ~2 km across: the CyAN cell scale
+    var MINH = MINW * 0.5;
+    var lim = mercY(85);
+    if (v.lon1 - v.lon0 > 360) { var c1 = (v.lon0 + v.lon1) / 2; v.lon0 = c1 - 180; v.lon1 = c1 + 180; }
+    if (v.lon1 - v.lon0 < MINW) { var c2 = (v.lon0 + v.lon1) / 2; v.lon0 = c2 - MINW / 2; v.lon1 = c2 + MINW / 2; }
+    if (v.my0 - v.my1 < MINH) { var c3 = (v.my0 + v.my1) / 2; v.my0 = c3 + MINH / 2; v.my1 = c3 - MINH / 2; }
+    if (v.my0 - v.my1 > 2 * lim) { var c4 = (v.my0 + v.my1) / 2; v.my0 = c4 + lim; v.my1 = c4 - lim; }
+    if (v.my0 > lim) { var d0 = v.my0 - lim; v.my0 -= d0; v.my1 -= d0; }
+    if (v.my1 < -lim) { var d1 = -lim - v.my1; v.my0 += d1; v.my1 += d1; }
+    return v;
+  }
+  function fitView(points, padFrac) {
+    var lats = [], lons = [];
+    (points || []).forEach(function (p) {
+      if (p && isNum(p.lat) && isNum(p.lon)) { lats.push(p.lat); lons.push(p.lon); }
+    });
+    if (!lats.length) return defaultView();
+    var lat0 = Math.min.apply(null, lats), lat1 = Math.max.apply(null, lats);
+    var lon0 = Math.min.apply(null, lons), lon1 = Math.max.apply(null, lons);
+    var pad = (padFrac === undefined) ? 0.35 : padFrac;
+    var dLat = Math.max(lat1 - lat0, 0.05), dLon = Math.max(lon1 - lon0, 0.05);
+    return clampView(viewFromExtent({
+      lon0: lon0 - dLon * pad, lon1: lon1 + dLon * pad,
+      lat0: lat0 - dLat * pad, lat1: lat1 + dLat * pad
+    }));
+  }
+  function zoomView(v, factor, fx, fy) {
+    fx = isNum(fx) ? fx : 0.5;
+    fy = isNum(fy) ? fy : 0.5;
+    var ws = v.lon1 - v.lon0, hs = v.my0 - v.my1;   // hs positive (see convention)
+    var nw = ws / factor, nh = hs / factor;
+    var ax = v.lon0 + ws * fx;                      // anchor longitudes
+    var ay = v.my0 - hs * fy;                       // fy measured down from the north edge
+    return clampView({
+      lon0: ax - nw * fx, lon1: ax + nw * (1 - fx),
+      my0: ay + nh * fy, my1: ay - nh * (1 - fy)
+    });
+  }
+  function panView(v, dxPx, dyPx, wPx, hPx) {
+    var ws = v.lon1 - v.lon0, hs = v.my0 - v.my1;
+    var dLon = (dxPx / Math.max(wPx, 1)) * ws;
+    var dMy = (dyPx / Math.max(hPx, 1)) * hs;
+    // Dragging right/down reveals west/north: the window moves with the pointer.
+    return clampView({ lon0: v.lon0 - dLon, lon1: v.lon1 - dLon, my0: v.my0 + dMy, my1: v.my1 + dMy });
+  }
+  function unproject(x, y, w, h, view) {
+    var v = view || defaultView();
+    return {
+      lon: v.lon0 + (x / Math.max(w, 1)) * (v.lon1 - v.lon0),
+      lat: myInv(v.my0 + (y / Math.max(h, 1)) * (v.my1 - v.my0))
+    };
+  }
+  function tileZoomFor(v, wPx) {
+    var span = v.lon1 - v.lon0;
+    var z = Math.log(360 / span) / Math.LN2 + Math.log(Math.max(wPx, 256) / 256) / Math.LN2;
+    return Math.max(2, Math.min(11, Math.round(z)));
   }
   function buildMapModel(blob, ix) {
     var sat = (blob.satellite || []).filter(function (s) { return s && s.grid && s.grid.length; });
@@ -283,11 +363,17 @@ ul.tight li{margin:3px 0}
       }, {})
     };
   }
-  function drawMap(canvas, blob, ix) {
+  function drawMap(canvas, blob, ix, view, lw, lh) {
     if (!canvas || typeof canvas.getContext !== 'function') return 0;
     var ctx = canvas.getContext('2d');
     if (!ctx) return 0;
-    var w = canvas.width || 900, h = canvas.height || Math.round((canvas.width || 900) * 0.46);
+    // lw/lh are LOGICAL (CSS pixel) dimensions: the backing store may be
+    // scaled by devicePixelRatio, so canvas.width is not the drawing space.
+    var w = lw || canvas.width || 900;
+    var h = lh || canvas.height || Math.round(w * 0.46);
+    // NOTE: named vw, not v - the grid loop below already uses `v` for the
+    // cell value, and `var` is function-scoped, so `v` would be clobbered.
+    var vw = view || defaultView();
     var model = buildMapModel(blob, ix || indexBlob(blob));
     var ops = 0;
     ctx.clearRect(0, 0, w, h);
@@ -306,8 +392,9 @@ ul.tight li{margin:3px 0}
           if (!isNum(v)) continue;   // no retrieval -> leave unpainted, never 0
           var lat = latHi - dLat * r;              // row 0 is the NORTH edge
           var lon = lonLo + dLon * c;              // col 0 is the WEST edge
-          var p1 = project(lon, lat, w, h);
-          var p2 = project(lon + dLon, lat - dLat, w, h);
+          var p1 = project(lon, lat, w, h, vw);
+          var p2 = project(lon + dLon, lat - dLat, w, h, vw);
+          if (p2.x < 0 || p1.x > w || p2.y < 0 || p1.y > h) continue;   // cull off-screen
           ctx.fillStyle = colorFor(v);
           ctx.fillRect(p1.x, p1.y, Math.max(1, p2.x - p1.x), Math.max(1, p2.y - p1.y));
           ops++;
@@ -316,10 +403,11 @@ ul.tight li{margin:3px 0}
     });
     // site pins
     model.pins.forEach(function (s) {
-      var p = project(s.lon, s.lat, w, h);
+      var p = project(s.lon, s.lat, w, h, vw);
+      if (p.x < -24 || p.x > w + 24 || p.y < -24 || p.y > h + 24) return;
       var level = model.pinAlerts[s.id];
       ctx.beginPath();
-      ctx.arc(p.x, p.y, s.watch ? 4 : 2.5, 0, Math.PI * 2);
+      ctx.arc(p.x, p.y, s.watch ? 6 : 3.5, 0, Math.PI * 2);
       ctx.fillStyle = level === 'exceedance' ? '#ef4444' : (level === 'approaching' ? '#f59e0b' : '#8892b0');
       ctx.fill(); ops++;
       if (s.watch) {
@@ -328,20 +416,43 @@ ul.tight li{margin:3px 0}
     });
     return ops;
   }
+  // Nearest site to a canvas pixel, for click hit-testing. Module-level so the
+  // harness can exercise it directly.
+  function nearestSite(ix, px, py, w, h, maxPx, view) {
+    var v = view || mapView || defaultView();
+    var best = null, bestD = (maxPx || 14) * (maxPx || 14);
+    Object.keys(ix.byId).forEach(function (id) {
+      var s = ix.byId[id];
+      if (!s || !isNum(s.lat) || !isNum(s.lon)) return;
+      var p = project(s.lon, s.lat, w, h, v);
+      var dx = p.x - px, dy = p.y - py, d = dx * dx + dy * dy;
+      if (d < bestD) { bestD = d; best = s; }
+    });
+    return best;
+  }
   function renderMap(blob, ix, ui) {
     var m = buildMapModel(blob, ix);
     var satNo = (blob.satellite || []).length - m.sat.length;
     var html = bannerHtml(blob) + thresholdFlagHtml(blob);
     html += '<div class="grid cols-2"><div class="card">'
       + '<h2>CyAN satellite index &amp; watchlist sites</h2>'
-      + '<div class="mapbox"><div class="tiles" id="maptiles"></div>'
+      + '<div class="mapbox" id="mapbox"><div class="tiles" id="maptiles"></div>'
       + '<canvas id="awmap" width="1000" height="460" aria-label="Cyanobacteria index map"></canvas>'
-      + '<div class="mapstatus" id="mapstatus">USGS National Map basemap optional — grid and pins render regardless</div></div>'
+      + '<div class="mapstatus" id="mapstatus"></div>'
+      + '<div class="mapctl">'
+      + '<button class="btn" data-map="in" title="Zoom in" aria-label="Zoom in">+</button>'
+      + '<button class="btn" data-map="out" title="Zoom out" aria-label="Zoom out">\u2212</button>'
+      + '<button class="btn" data-map="fit" title="Fit the watchlist">Fit</button>'
+      + '<button class="btn" data-map="reset" title="Whole country">US</button>'
+      + '</div>'
+      + '<div class="maphint dim">Drag to pan &middot; scroll or pinch to zoom &middot; click a pin for site detail</div>'
+      + '</div>'
       + '<div class="legend">'
       + COLORS.map(function (c) { return '<span class="sw"><i style="background:' + c.c + '"></i>' + c.label + '</span>'; }).join('')
       + '<span class="sw"><i style="background:#8892b0;border-radius:50%"></i>site</span>'
       + '<span class="sw"><i style="background:transparent;border:2px solid #22d3ee;border-radius:50%"></i>watchlist</span>'
       + '<span class="dim">units: mg m<sup>-3</sup> chlorophyll-a</span></div>'
+      + '</div>'
       + '</div>'
       + '<div class="card"><h2>Coverage right now</h2>'
       + kv('Satellite slices', m.sat.length + ' of ' + (blob.satellite || []).length + ' requests')
@@ -428,6 +539,8 @@ ul.tight li{margin:3px 0}
     var html = bannerHtml(blob) + thresholdFlagHtml(blob);
     html += '<div class="grid cols-2">'
       + '<div class="card"><h2>' + esc(s.name) + '</h2>'
+      + '<div class="row" style="margin:0 0 8px"><button class="btn" data-mapfocus="'
+      + esc(id) + '">Show satellite window on map</button></div>'
       + kv('State', s.state || '—')
       + kv('Type', s.type || '—')
       + kv('Coordinates', (isNum(s.lat) && isNum(s.lon)) ? s.lat.toFixed(4) + ', ' + s.lon.toFixed(4) : 'not published by the source')
@@ -665,64 +778,164 @@ ul.tight li{margin:3px 0}
       app.innerHTML = renderView(ui.view, BLOB, ix, ui);
       if (ui.view === 'map') {
         var c = document.getElementById('awmap');
+        var box = (c && c.parentElement) ? c.parentElement.clientWidth : 1000;
+        var cssW = Math.max(260, Math.min(box || 1000, 1000));
+        var cssH = Math.round(cssW * 0.46);
+        var dpr = window.devicePixelRatio || 1;
         if (c) {
-          var box = c.parentElement ? c.parentElement.clientWidth : 1000;
-          var dpr = window.devicePixelRatio || 1;
-          var cssW = Math.max(280, Math.min(box || 1000, 1000));
-          var cssH = Math.round(cssW * 0.46);
           c.style.width = cssW + 'px';
           c.style.height = cssH + 'px';
           c.width = Math.round(cssW * dpr);
           c.height = Math.round(cssH * dpr);
           var ctx = c.getContext('2d');
           if (ctx && ctx.scale) ctx.scale(dpr, dpr);
-          drawMap(c, BLOB, ix);
-          addTiles(document.getElementById('maptiles'), cssW, cssH);
         }
+        if (ui.mapView && ui.mapView.lon0 !== undefined) {
+          mapView = ui.mapView;                        // restore the saved view
+        } else if (!mapView) {
+          // Default to the watchlist footprint. Each CyAN window is only ~0.6
+          // degrees wide, so a CONUS-wide default renders them as specks.
+          mapView = fitView((ui.watch || []).map(function (id) { return ix.byId[id]; }), 0.25);
+        }
+        drawMap(c, BLOB, ix, mapView, cssW, cssH);
+        addTiles(document.getElementById('maptiles'), cssW, cssH, mapView);
+        wireMap(c, cssW, cssH, ix, ui, paint);
+        updateStatus();
       }
       if (ui.view === 'site') drawChart();
     }
 
     // Optional .gov basemap. Purely decorative: if the tiles are blocked or
     // offline, the grid and pins above still render.
+    function persistView() {
+      ui.mapView = { lon0: mapView.lon0, lon1: mapView.lon1, my0: mapView.my0, my1: mapView.my1 };
+      saveState(ui);
+    }
+    function updateStatus() {
+      var st = document.getElementById('mapstatus');
+      if (!st) return;
+      var b = viewBounds(mapView);
+      var tiles = document.getElementById('maptiles');
+      var noBase = tiles && tiles.style.display === 'none';
+      st.textContent = Math.abs(b.lon1 - b.lon0).toFixed(2) + '\u00b0 \u00d7 '
+        + Math.abs(b.lat1 - b.lat0).toFixed(2) + '\u00b0 \u00b7 '
+        + (BLOB.satellite || []).length + ' satellite windows in this build'
+        + (noBase ? ' \u00b7 basemap blocked, grid + pins only' : '');
+    }
+    function mapRedraw(canvas, w, h, ix) {
+      drawMap(canvas, BLOB, ix, mapView, w, h);
+      addTiles(document.getElementById('maptiles'), w, h, mapView);
+      updateStatus();
+    }
+    function wireMap(canvas, w, h, ix, u, repaint) {
+      if (!canvas) return;
+      var dragging = false, moved = 0, lastX = 0, lastY = 0;
+      canvas.addEventListener('wheel', function (e) {
+        e.preventDefault();
+        var r = canvas.getBoundingClientRect();
+        mapView = zoomView(mapView, e.deltaY < 0 ? 1.3 : 1 / 1.3,
+          (e.clientX - r.left) / Math.max(r.width, 1),
+          (e.clientY - r.top) / Math.max(r.height, 1));
+        persistView();
+        mapRedraw(canvas, w, h, ix);
+      }, { passive: false });
+      canvas.addEventListener('pointerdown', function (e) {
+        dragging = true; moved = 0; lastX = e.clientX; lastY = e.clientY;
+        if (canvas.setPointerCapture) { try { canvas.setPointerCapture(e.pointerId); } catch (err) {} }
+      });
+      canvas.addEventListener('pointermove', function (e) {
+        if (!dragging) return;
+        var dx = e.clientX - lastX, dy = e.clientY - lastY;
+        lastX = e.clientX; lastY = e.clientY;
+        moved += Math.abs(dx) + Math.abs(dy);
+        mapView = panView(mapView, dx, dy, w, h);
+        drawMap(canvas, BLOB, ix, mapView, w, h);
+      });
+      function endDrag() {
+        if (!dragging) return;
+        dragging = false;
+        persistView();
+        mapRedraw(canvas, w, h, ix);
+      }
+      canvas.addEventListener('pointerup', function (e) {
+        var wasDrag = moved > 6;                 // a drag is not a click
+        endDrag();
+        if (wasDrag) return;
+        var r = canvas.getBoundingClientRect();
+        var hit = nearestSite(ix,
+          (e.clientX - r.left) / Math.max(r.width, 1) * w,
+          (e.clientY - r.top) / Math.max(r.height, 1) * h, w, h, 16, mapView);
+        if (hit) { u.site = hit.id; u.view = 'site'; saveState(u); repaint(); }
+      });
+      canvas.addEventListener('pointercancel', endDrag);
+      canvas.addEventListener('pointerleave', endDrag);
+      canvas.addEventListener('dblclick', function (e) {
+        var r = canvas.getBoundingClientRect();
+        mapView = zoomView(mapView, 1.6,
+          (e.clientX - r.left) / Math.max(r.width, 1),
+          (e.clientY - r.top) / Math.max(r.height, 1));
+        persistView();
+        mapRedraw(canvas, w, h, ix);
+      });
+      var box = document.getElementById('mapbox');
+      if (box) {
+        box.addEventListener('click', function (e) {
+          var b = e.target && e.target.closest ? e.target.closest('[data-map]') : null;
+          if (!b) return;
+          e.preventDefault();
+          var act = b.getAttribute('data-map');
+          if (act === 'in') mapView = zoomView(mapView, 1.5, 0.5, 0.5);
+          else if (act === 'out') mapView = zoomView(mapView, 1 / 1.5, 0.5, 0.5);
+          else if (act === 'fit') mapView = fitView((u.watch || []).map(function (id) { return ix.byId[id]; }), 0.25);
+          else mapView = defaultView();
+          persistView();
+          mapRedraw(canvas, w, h, ix);
+        });
+      }
+    }
     function addTiles(host, w, h) {
       if (!host) return;
-      var z = 4, n = Math.pow(2, z);
+      var v = mapView || defaultView();
+      var z = tileZoomFor(v, w);
+      var n = Math.pow(2, z);
       function lonTile(lon) { return (lon + 180) / 360 * n; }
       function latTile(lat) {
         var r = lat * Math.PI / 180;
         return (1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2 * n;
       }
-      var x0 = lonTile(MAP_EXTENT.lon0), x1 = lonTile(MAP_EXTENT.lon1);
-      var y0 = latTile(MAP_EXTENT.lat1), y1 = latTile(MAP_EXTENT.lat0);
-      var px = w / (x1 - x0);
-      var html = '', loaded = 0, tried = 0;
-      for (var tx = Math.floor(x0); tx <= Math.floor(x1); tx++) {
-        for (var ty = Math.floor(y0); ty <= Math.floor(y1); ty++) {
+      function tile2lon(x) { return x / n * 360 - 180; }
+      function tile2lat(y) { return Math.atan(Math.sinh(Math.PI * (1 - 2 * y / n))) * 180 / Math.PI; }
+      var b = viewBounds(v);
+      var x0 = lonTile(b.lon0), x1 = lonTile(b.lon1);
+      var y0 = latTile(b.lat1), y1 = latTile(b.lat0);
+      var html = '', loaded = 0, tried = 0, MAXT = 48;
+      for (var tx = Math.floor(x0); tx <= Math.floor(x1) && tried < MAXT; tx++) {
+        for (var ty = Math.floor(y0); ty <= Math.floor(y1) && tried < MAXT; ty++) {
+          if (ty < 0 || ty >= n) continue;
+          var q1 = project(tile2lon(tx), tile2lat(ty), w, h, v);
+          var q2 = project(tile2lon(tx + 1), tile2lat(ty + 1), w, h, v);
           tried++;
-          html += '<img alt="" loading="lazy" style="left:' + ((tx - x0) * px).toFixed(1) + 'px;top:'
-            + ((ty - y0) * px).toFixed(1) + 'px;width:' + px.toFixed(1) + 'px;height:' + px.toFixed(1) + 'px"'
+          html += '<img alt="" loading="lazy" style="left:' + q1.x.toFixed(1) + 'px;top:' + q1.y.toFixed(1)
+            + 'px;width:' + Math.ceil(q2.x - q1.x).toFixed(1) + 'px;height:' + Math.ceil(q2.y - q1.y).toFixed(1) + 'px"'
             + ' src="https://basemap.nationalmap.gov/arcgis/rest/services/USGSTopo/MapServer/tile/'
             + z + '/' + ty + '/' + tx + '">';
         }
       }
       host.innerHTML = html;
-      var status = document.getElementById('mapstatus');
+      host.style.display = '';
       Array.prototype.forEach.call(host.querySelectorAll('img'), function (im) {
         im.onload = function () { loaded++; };
         im.onerror = function () {
           host.style.display = 'none';
-          if (status) status.textContent = 'USGS basemap blocked — grid and pins shown without it';
+          updateStatus();
         };
       });
-      if (status) {
-        setTimeout(function () {
-          if (loaded === 0 && tried > 0 && host.style.display !== 'none') {
-            host.style.display = 'none';
-            status.textContent = 'USGS basemap unavailable — grid and pins shown without it';
-          }
-        }, 2500);
-      }
+      setTimeout(function () {
+        if (loaded === 0 && tried > 0 && host.style.display !== 'none') {
+          host.style.display = 'none';
+          updateStatus();
+        }
+      }, 2500);
     }
 
     function drawChart() {
@@ -766,6 +979,20 @@ ul.tight li{margin:3px 0}
       var site = t.getAttribute && t.getAttribute('data-site');
       if (site) { e.preventDefault(); ui.site = site; ui.view = 'site'; saveState(ui); paint(); return; }
       var un = t.getAttribute && t.getAttribute('data-unwatch');
+      var focus = t.getAttribute && t.getAttribute('data-mapfocus');
+      if (focus && ix.byId[focus]) {
+        // Frame the site's actual CyAN window (0.6 deg), not just its pin.
+        var sat = ix.satBySite[focus];
+        var pts = (sat && sat.bbox && sat.bbox.length === 4)
+          ? [{ lat: sat.bbox[0], lon: sat.bbox[1] }, { lat: sat.bbox[2], lon: sat.bbox[3] }]
+          : [ix.byId[focus]];
+        mapView = fitView(pts, 0.25);
+        ui.mapView = mapView;
+        ui.view = 'map';
+        saveState(ui);
+        paint();
+        return;
+      }
       if (un) {
         ui.watch = ui.watch.filter(function (x) { return x !== un; });
         if (ui.site === un) ui.site = ui.watch[0] || null;
@@ -791,6 +1018,11 @@ ul.tight li{margin:3px 0}
     prettyParam: prettyParam, indexBlob: indexBlob, latestOf: latestOf,
     bannerHtml: bannerHtml, thresholdFlagHtml: thresholdFlagHtml, unverified: unverified,
     project: project, colorFor: colorFor, buildMapModel: buildMapModel, drawMap: drawMap,
+    defaultView: defaultView, viewFromExtent: viewFromExtent, viewBounds: viewBounds,
+    clampView: clampView, fitView: fitView, zoomView: zoomView, panView: panView,
+    unproject: unproject, tileZoomFor: tileZoomFor, nearestSite: nearestSite,
+    getMapView: function () { return mapView; },
+    setMapView: function (v) { mapView = v; return mapView; },
     renderView: renderView, defaultState: defaultState, deepMerge: deepMerge, viewCount: viewCount
   };
   if (typeof window !== 'undefined') window.__AW__ = API;
