@@ -168,10 +168,24 @@ No data is fetched at runtime; everything comes from the baked blob.
 
 ```bash
 python collector/bake.py              # inject the blob
+python scripts/test_http_retry.py     # retry-policy gate   -> exit 0 (offline, no network)
 node scripts/verify_site.js           # Phase 1 build gate  -> exit 0
 node scripts/aw_test.js               # Phase 2 harness     -> exit 0 (102 assertions)
 bash scripts/verify_map_geom.sh       # map geometry gate   -> exit 0 (real Chrome)
 ```
+
+`scripts/test_http_retry.py` pins the collector's transient-failure policy and is
+part of the deploy gate. The daily refresh fires at 08:00 PT, which is when
+CoastWatch reloads its ERDDAP datasets: while a dataset is reloading, every
+request for it answers `HTTP 404 … Currently unknown datasetID`, and the same URL
+is 200 again a minute later. Windows DNS also blips during the morning catch-up
+burst (`Errno 11001 getaddrinfo failed`). Between 2026-09-24 and 2026-09-29 four
+of six scheduled runs died on one of those two and left the live site a day
+stale, so `http_get()` now retries `5 s / 20 s / 60 s` (4 attempts, 240 s total
+sleep budget) on 5xx, 429, timeouts, connection failures and *that specific* 404.
+A genuine client error is never retried — WQP answers an unknown
+`characteristicName` with a bare `HTTP 400` and an empty body, and that must keep
+failing loudly on the first attempt.
 
 `scripts/aw_test.js` loads the **baked** artifact, extracts the real blob,
 executes the app script in a bare sandbox with no DOM, and asserts the honesty

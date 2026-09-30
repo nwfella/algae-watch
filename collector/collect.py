@@ -12,6 +12,7 @@ import csv
 import json
 import re
 import sys
+import time
 import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
@@ -336,25 +337,68 @@ def state_from_nws(area_desc: str) -> str | None:
     return None
 
 
-def http_get(url: str, ua: str = BROWSER_UA, timeout: int = 30) -> bytes:
-    allowlist_guard(url)
-    req = urllib.request.Request(url, headers={"User-Agent": ua})
+# --- transient-failure policy ------------------------------------------------
+# The daily refresh fires at 08:00 PT, which is also when CoastWatch reloads its
+# ERDDAP datasets: during a reload a dataset drops out of the catalog and every
+# request for it answers HTTP 404 "Currently unknown datasetID", then the SAME
+# URL is 200 again a minute later. Windows DNS also blips during the morning
+# catch-up burst (Errno 11001 getaddrinfo failed). Measured 2026-09-24..29: four
+# of six scheduled runs died on one of those and left the live site a day stale.
+# Neither is a data problem, so both are retried. A genuine client error is
+# NEVER retried: WQP answers an unknown characteristicName with a bare HTTP 400
+# and an empty body, and that must keep failing loudly on the first attempt.
+RETRY_DELAYS = (5.0, 20.0, 60.0)  # 4 attempts total per request
+RETRY_HTTP_CODES = frozenset({408, 425, 429, 500, 502, 503, 504, 507, 509})
+# Cap the total sleeping so a bad upstream day cannot outlive the caller's
+# collect timeout (daily_refresh.py allows 1200 s for the whole collector).
+RETRY_BUDGET_SECONDS = 240.0
+
+
+def _error_body(exc: urllib.error.HTTPError) -> str:
+    """Read an HTTP error body ONCE - a second read returns nothing."""
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return resp.read()
-    except urllib.error.HTTPError as exc:
-        # Never let an HTTP failure surface without its reason. WQP answers an
-        # unknown characteristicName with a bare HTTP 400 and an EMPTY body,
-        # which is otherwise indistinguishable from a transient fault.
+        body = exc.read() or b""
+    except Exception:  # pragma: no cover - defensive
         body = b""
+    return body.decode("utf-8", errors="replace").strip()[:400] or "(empty response body)"
+
+
+def http_get(url: str, ua: str = BROWSER_UA, timeout: int = 30) -> bytes:
+    """GET with bounded retries on the transient faults these .gov APIs emit."""
+    allowlist_guard(url)
+    budget = RETRY_BUDGET_SECONDS
+    attempts = len(RETRY_DELAYS) + 1
+    for attempt in range(attempts):
+        req = urllib.request.Request(url, headers={"User-Agent": ua})
         try:
-            body = exc.read() or b""
-        except Exception:  # pragma: no cover - defensive
-            pass
-        detail = body.decode("utf-8", errors="replace").strip()[:400] or "(empty response body)"
-        raise SystemExit(
-            f"fail loudly: HTTP {exc.code} from {url}\n  server said: {detail}"
-        ) from exc
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return resp.read()
+        except urllib.error.HTTPError as exc:
+            # Never let an HTTP failure surface without its reason. WQP answers an
+            # unknown characteristicName with a bare HTTP 400 and an EMPTY body,
+            # which is otherwise indistinguishable from a transient fault.
+            detail = _error_body(exc)
+            exc_detail = f"HTTP {exc.code} from {url}\n  server said: {detail}"
+            exc_retry = exc.code in RETRY_HTTP_CODES or (
+                exc.code == 404 and "unknown datasetid" in detail.lower()
+            )
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            exc_detail = f"{type(exc).__name__}: {exc} from {url}"
+            exc_retry = isinstance(
+                exc, (urllib.error.URLError, TimeoutError, ConnectionError)
+            )
+
+        if not exc_retry or attempt >= attempts - 1 or budget <= 0:
+            raise SystemExit("fail loudly: " + exc_detail)
+        delay = min(RETRY_DELAYS[attempt], budget)
+        budget -= delay
+        print(
+            f"transient upstream failure on attempt {attempt + 1}/{attempts}, "
+            f"retrying in {delay:g}s -- {exc_detail.splitlines()[0]}",
+            file=sys.stderr,
+        )
+        time.sleep(delay)
+    raise SystemExit(f"fail loudly: retries exhausted for {url}")  # pragma: no cover
 
 
 def http_get_json(url: str, ua: str = BROWSER_UA) -> object:

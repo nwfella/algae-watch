@@ -192,8 +192,14 @@ def main() -> int:
     if r.returncode != 0:
         die(f"bake exited {r.returncode}\n{tail(r.stdout + r.stderr)}")
 
-    # --- 4. gates: nothing ships unless both pass ---------------------------
+    # --- 4. gates: nothing ships unless every gate passes --------------------
     node = tool("node")
+    # The offline retry-policy unit gate: it proves a transient upstream fault
+    # (CoastWatch dataset reload, DNS blip) is absorbed instead of aborting the
+    # refresh, so it must pass before the live artifact is deployed.
+    r = run([sys.executable, "scripts/test_http_retry.py"])
+    if r.returncode != 0:
+        die(f"scripts/test_http_retry.py exited {r.returncode} - REFUSING TO DEPLOY\n{tail(r.stdout + r.stderr)}")
     for gate in ("scripts/verify_site.js", "scripts/aw_test.js"):
         r = run([node, gate])
         if r.returncode != 0:
